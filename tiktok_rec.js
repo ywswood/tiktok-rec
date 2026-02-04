@@ -163,58 +163,122 @@ function handleGenerateScript(data) {
 }
 
 // ==========================================
-// 3. Speech to Text (via API Bank)
+// 3. Robust Gemini API Calling Logic
 // ==========================================
-// ==========================================
-// 3. Speech to Text (via API Bank)
-// ==========================================
-function transcribeAudio(blob) {
-    const bankRes = getApiKey('stt');
-    if (!bankRes) {
-        Logger.log('STT Error: No API Key available');
-        return { error: 'No API Key' };
+
+/**
+ * Gemini APIを呼び出す。API Bankによる負荷分散、503リトライ、レート制限をハンドルする。
+ * @param {Object} options - { prompt, blob, mimeType, response_mime_type }
+ * @returns {String|null} - 生成されたテキスト。失敗時は例外を投げるかnullを返す。
+ */
+function callGeminiWithRetry(options) {
+    const { prompt, blob, mimeType, response_mime_type } = options;
+    const MAX_RETRIES = 3;
+    let previousModel = null;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        Logger.log(`🔄 Gemini API Call (Attempt ${attempt}/${MAX_RETRIES})`);
+
+        // 1. API Bankからキーとモデルを取得
+        let bankUrl = `${CONFIG.BANK_URL}?pass=${CONFIG.BANK_PASS}&project=${CONFIG.PROJECT_NAME}`;
+        if (previousModel) {
+            bankUrl += `&error_503=true&previous_model=${encodeURIComponent(previousModel)}`;
+        }
+
+        const bankRes = UrlFetchApp.fetch(bankUrl, { muteHttpExceptions: true });
+        const bankData = JSON.parse(bankRes.getContentText());
+
+        if (bankData.status === 'rate_limited') {
+            const waitMs = bankData.wait_ms || 5000;
+            Logger.log(`⏳ Rate Limited. Waiting ${waitMs}ms...`);
+            Utilities.sleep(waitMs);
+            attempt--; // 回数をカウントせずリトライ
+            continue;
+        }
+
+        if (bankData.status !== 'success') {
+            throw new Error(`API Bank Error: ${bankData.message}`);
+        }
+
+        const { api_key, model_name } = bankData;
+        Logger.log(`📦 Model: ${model_name}`);
+
+        try {
+            // 2. Gemini API 呼び出し
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model_name}:generateContent?key=${api_key}`;
+
+            const parts = [{ text: prompt }];
+            if (blob) {
+                parts.push({
+                    inline_data: {
+                        mime_type: mimeType || blob.getContentType(),
+                        data: Utilities.base64Encode(blob.getBytes())
+                    }
+                });
+            }
+
+            const payload = {
+                contents: [{ parts: parts }]
+            };
+
+            if (response_mime_type) {
+                payload.generationConfig = { response_mime_type: response_mime_type };
+            }
+
+            const geminiRes = UrlFetchApp.fetch(apiUrl, {
+                method: 'post',
+                contentType: 'application/json',
+                payload: JSON.stringify(payload),
+                muteHttpExceptions: true
+            });
+
+            const statusCode = geminiRes.getResponseCode();
+
+            // 503エラーは次のモデルでリトライ
+            if (statusCode === 503) {
+                Logger.log(`⚠️ 503 Error (Service Unavailable).`);
+                previousModel = model_name;
+                Utilities.sleep(2000);
+                continue;
+            }
+
+            const resData = JSON.parse(geminiRes.getContentText());
+            if (resData.error || !resData.candidates || resData.candidates.length === 0) {
+                Logger.log("❌ Gemini API Error: " + JSON.stringify(resData));
+                reportError(api_key); // 503以外は報告
+                throw new Error(resData.error ? resData.error.message : 'No candidates');
+            }
+
+            // 成功
+            return resData.candidates[0].content.parts[0].text;
+
+        } catch (e) {
+            Logger.log(`❌ Exception: ${e}`);
+            if (attempt === MAX_RETRIES) throw e;
+            Utilities.sleep(2000);
+        }
     }
+    return null;
+}
 
-    const { api_key, model_name } = bankRes;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model_name}:generateContent?key=${api_key}`;
-
-    const payload = {
-        contents: [{
-            parts: [
-                { text: "音声を書き起こしてください。フィラーは除去してください。" },
-                { inline_data: { mime_type: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) } }
-            ]
-        }]
-    };
-
+/**
+ * 音声を文字起こしする
+ */
+function transcribeAudio(blob) {
     try {
-        const res = UrlFetchApp.fetch(url, {
-            method: 'post',
-            contentType: 'application/json',
-            payload: JSON.stringify(payload),
-            muteHttpExceptions: true
+        const text = callGeminiWithRetry({
+            prompt: "音声を文字起こししてください。フィラーは除去してください。",
+            blob: blob
         });
-
-        if (res.getResponseCode() === 503) {
-            return { error: '503 Service Unavailable' };
-        }
-
-        const json = JSON.parse(res.getContentText());
-        if (json.candidates && json.candidates[0].content) {
-            return { text: json.candidates[0].content.parts[0].text };
-        } else {
-            return { error: 'No content generated (Silence or Filtered)', details: json };
-        }
+        return { text: text };
     } catch (e) {
-        reportError(api_key);
-        Logger.log('STT Error: ' + e);
         return { error: e.toString() };
     }
 }
 
-// ==========================================
-// 4. Generate Video Plan (via API Bank)
-// ==========================================
+/**
+ * 動画プランを生成する
+ */
 function generateVideoPlan(transcript) {
     const SYSTEM_PROMPT = `
 以下の要素を生成してください：
@@ -233,63 +297,27 @@ function generateVideoPlan(transcript) {
 必ずJSON形式で出力してください。Markdownのコードブロックは不要です。
 `;
 
-    const userMessage = `【音声内容】\n${transcript}`;
-
-    // Fixed: Retry logic updated
-    let previousModel = null;
-    const MAX_RETRIES = 3;
-
-    for (let i = 0; i < MAX_RETRIES; i++) {
-        const bankRes = getApiKey('gemini', previousModel, i > 0);
-        if (!bankRes) break;
-
-        const { api_key, model_name } = bankRes;
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model_name}:generateContent?key=${api_key}`;
-
-        const payload = {
-            contents: [{ parts: [{ text: SYSTEM_PROMPT + "\n" + userMessage }] }],
-            generationConfig: { response_mime_type: "application/json" }
-        };
-
-        try {
-            const res = UrlFetchApp.fetch(url, {
-                method: 'post',
-                contentType: 'application/json',
-                payload: JSON.stringify(payload),
-                muteHttpExceptions: true
-            });
-
-            if (res.getResponseCode() === 503) {
-                previousModel = model_name;
-                Utilities.sleep(2000);
-                continue;
-            }
-
-            const json = JSON.parse(res.getContentText());
-            if (json.candidates && json.candidates[0].content) {
-                const rawText = json.candidates[0].content.parts[0].text;
-                const cleanText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-                return JSON.parse(cleanText);
-            } else {
-                reportError(api_key);
-            }
-        } catch (e) {
-            reportError(api_key);
-            Logger.log('LLM Error: ' + e);
-        }
+    try {
+        const rawText = callGeminiWithRetry({
+            prompt: SYSTEM_PROMPT + "\n\n【音声内容】\n" + transcript,
+            response_mime_type: "application/json"
+        });
+        const cleanText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+        return JSON.parse(cleanText);
+    } catch (e) {
+        Logger.log('Content Generation Error: ' + e);
+        return null;
     }
-    return null;
 }
 
 // ==========================================
-// 5. Spreadsheet Logic
+// 4. Spreadsheet Logic
 // ==========================================
 function saveToSpreadsheet(data) {
     const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
     const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
     if (!sheet) throw new Error(`Sheet '${CONFIG.SHEET_NAME}' not found`);
 
-    // カラム構成: ID, 作成日時, 投稿予定日, 投稿日, ステータス, 本文, ハッシュタグ, 動画ファイルID, 音声テキストID, 備考
     sheet.appendRow([
         data.id,              // ID
         data.created,         // 作成日時
@@ -305,23 +333,8 @@ function saveToSpreadsheet(data) {
 }
 
 // ==========================================
-// 6. API Bank Utilities
+// 5. API Bank Utilities
 // ==========================================
-function getApiKey(type, previousModel = null, is503 = false) {
-    let url = `${CONFIG.BANK_URL}?pass=${CONFIG.BANK_PASS}&project=${CONFIG.PROJECT_NAME}&type=${type}`;
-    if (is503 && previousModel) {
-        url += `&error_503=true&previous_model=${encodeURIComponent(previousModel)}`;
-    }
-    try {
-        const res = UrlFetchApp.fetch(url);
-        const json = JSON.parse(res.getContentText());
-        if (json.status === 'success' || json.status === 'rate_limited') return json;
-    } catch (e) {
-        Logger.log('Bank Error: ' + e);
-    }
-    return null;
-}
-
 function reportError(key) {
     try {
         UrlFetchApp.fetch(CONFIG.BANK_URL, {
