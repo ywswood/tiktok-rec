@@ -13,7 +13,7 @@ const PROPS = PropertiesService.getScriptProperties().getProperties();
 const CONFIG = {
     BANK_URL: PROPS.BANK_URL,
     BANK_PASS: PROPS.BANK_PASS,
-    PROJECT_NAME: 'TikTokRec',
+    PROJECT_NAME: PROPS.PROJECT_NAME || 'tiktok-rec',
 
     // Folders
     VOICE_FOLDER_ID: PROPS.VOICE_FOLDER_ID,
