@@ -2,7 +2,9 @@
 const CONFIG = {
     // Production GAS Web App URL
     API_URL: 'https://script.google.com/macros/s/AKfycbwtKHqOYcbBRqe-fEqUqiag_oFjSlnkD8K5If-pIq5UjE386qQf47Rkdfe1LTmQdjhH9Q/exec',
-    MIME_TYPE: 'audio/webm;codecs=opus'
+    MIME_TYPE: 'audio/webm;codecs=opus',
+    CHUNK_DURATION: 30 * 1000, // 30秒ごとにアップロード（TikTok用なので短めに設定）
+    FILE_EXTENSION: '.webm'
 };
 
 /* =========================================
@@ -11,10 +13,16 @@ const CONFIG = {
 let state = {
     isRecording: false,
     mediaRecorder: null,
+    audioStream: null,
     audioChunks: [],
+    uploadedChunks: 0,
+    currentChunk: 0,
+    sessionId: null,
     generatedData: null,
     currentSceneIndex: 0,
     animationInterval: null,
+    timerInterval: null,
+    chunkInterval: null,
     currentAnimationClass: ''
 };
 
@@ -49,22 +57,28 @@ els.copyBtn.addEventListener('click', copyToClipboard);
    RECORDING LOGIC
    ========================================= */
 async function toggleRecording() {
-    // If result is showing, button logic might change, but we hide it via UI. 
-    // Safety check:
     if (state.generatedData) return;
 
     if (!state.isRecording) {
         // START
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            state.mediaRecorder = new MediaRecorder(stream, { mimeType: CONFIG.MIME_TYPE });
+            state.audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            state.mediaRecorder = new MediaRecorder(state.audioStream, { mimeType: CONFIG.MIME_TYPE });
+
+            // Session ID Generation
+            const now = new Date();
+            state.sessionId = formatDate(now) + '_' +
+                String(now.getHours()).padStart(2, '0') +
+                String(now.getMinutes()).padStart(2, '0') +
+                String(now.getSeconds()).padStart(2, '0');
+
+            state.currentChunk = 0;
+            state.uploadedChunks = 0;
             state.audioChunks = [];
 
             state.mediaRecorder.ondataavailable = (e) => {
                 if (e.data.size > 0) state.audioChunks.push(e.data);
             };
-
-            state.mediaRecorder.onstop = processAudio;
 
             state.mediaRecorder.start();
             state.isRecording = true;
@@ -72,64 +86,141 @@ async function toggleRecording() {
             // UI Update
             els.recButton.classList.add('recording');
             els.recText.innerText = 'STOP';
-            els.status.innerText = '録音中... タップして停止＆生成';
+            els.status.innerText = '録音中... (自動保存中)';
+
+            // Start Chunking
+            scheduleNextChunk();
 
         } catch (err) {
             alert('マイクのアクセスに失敗しました: ' + err.message);
         }
     } else {
         // STOP
-        state.mediaRecorder.stop();
         state.isRecording = false;
 
         // UI Update
         els.recButton.classList.remove('recording');
         els.recText.innerText = 'WAIT...';
-        els.status.innerText = 'AIが動画を生成中... (30〜60秒かかります)';
-        // Here you could add a spinner animation to the button ring if desired
+        els.status.innerText = '最後のデータを処理中...';
+
+        if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
+            state.mediaRecorder.stop();
+            state.mediaRecorder.onstop = async () => {
+                state.currentChunk++;
+                await processChunk(true); // Final chunk
+                cleanup();
+            };
+        } else {
+            cleanup();
+        }
     }
 }
 
-/* =========================================
-   PROCESSING LOGIC
-   ========================================= */
-async function processAudio() {
-    const blob = new Blob(state.audioChunks, { type: CONFIG.MIME_TYPE });
+function scheduleNextChunk() {
+    state.chunkInterval = setTimeout(async () => {
+        if (state.isRecording && state.mediaRecorder && state.mediaRecorder.state === 'recording') {
+            state.mediaRecorder.stop();
+            state.mediaRecorder.onstop = async () => {
+                state.currentChunk++;
+                const currentChunks = [...state.audioChunks];
+                state.audioChunks = [];
 
-    // Convert Blob to Base64
-    const reader = new FileReader();
-    reader.readAsDataURL(blob);
-    reader.onloadend = async () => {
-        const base64data = reader.result.split(',')[1];
+                // 次の録音を即座に開始
+                if (state.isRecording) {
+                    state.mediaRecorder.start();
+                    scheduleNextChunk();
+                }
 
-        try {
-            if (CONFIG.API_URL === 'YOUR_GAS_WEB_APP_URL_HERE') {
-                throw new Error('GASのURLが設定されていません。backend.jsをデプロイしてください。');
-            }
-
-            const response = await fetch(CONFIG.API_URL, {
-                method: 'POST',
-                // HEADERS REMOVED TO PREVENT CORS PREFLIGHT OPTION FAILURES
-                body: JSON.stringify({
-                    audioData: base64data,
-                    mimeType: CONFIG.MIME_TYPE
-                })
-            });
-
-            const result = await response.json();
-
-            if (result.status === 'success') {
-                handleSuccess(result.data);
-            } else {
-                throw new Error(result.message || 'Unknown Error');
-            }
-
-        } catch (err) {
-            console.error(err);
-            els.status.innerText = 'エラー: ' + err.message;
-            els.recText.innerText = 'RETRY';
+                // 非同期でアップロード
+                await processChunk(false, currentChunks);
+            };
         }
-    };
+    }, CONFIG.CHUNK_DURATION);
+}
+
+async function processChunk(isFinal = false, chunksOverride = null) {
+    const chunks = chunksOverride || state.audioChunks;
+    if (chunks.length === 0) {
+        if (isFinal) handleFinalGeneration();
+        return;
+    }
+
+    const blob = new Blob(chunks, { type: CONFIG.MIME_TYPE });
+    const chunkNumber = String(state.currentChunk).padStart(2, '0');
+    const fileName = `${state.sessionId}_chunk${chunkNumber}${CONFIG.FILE_EXTENSION}`;
+
+    console.log(`Uploading chunk: ${fileName}`);
+
+    try {
+        await uploadToGAS(blob, fileName);
+        state.uploadedChunks++;
+        if (isFinal) {
+            handleFinalGeneration();
+        }
+    } catch (err) {
+        console.error('Upload failed', err);
+        if (isFinal) handleFinalGeneration();
+    }
+}
+
+async function uploadToGAS(blob, fileName) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(blob);
+        reader.onloadend = async () => {
+            try {
+                const base64Data = reader.result.split(',')[1];
+                await fetch(CONFIG.API_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    body: JSON.stringify({
+                        action: 'upload_chunk',
+                        fileName: fileName,
+                        audioData: base64Data
+                    })
+                });
+                resolve();
+            } catch (e) { reject(e); }
+        };
+        reader.onerror = (e) => reject(e);
+    });
+}
+
+async function handleFinalGeneration() {
+    els.status.innerText = '台本を生成中...';
+    try {
+        const response = await fetch(CONFIG.API_URL, {
+            method: 'POST',
+            body: JSON.stringify({
+                action: 'generate_script',
+                sessionId: state.sessionId
+            })
+        });
+        const result = await response.json();
+        if (result.status === 'success') {
+            handleSuccess(result.data);
+        } else {
+            throw new Error(result.message);
+        }
+    } catch (err) {
+        els.status.innerText = 'エラー: ' + err.message;
+        els.recText.innerText = 'RETRY';
+    }
+}
+
+function cleanup() {
+    if (state.chunkInterval) clearTimeout(state.chunkInterval);
+    if (state.audioStream) {
+        state.audioStream.getTracks().forEach(t => t.stop());
+        state.audioStream = null;
+    }
+}
+
+function formatDate(date) {
+    const year = String(date.getFullYear()).slice(-2);
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}${month}${day}`;
 }
 
 /* =========================================

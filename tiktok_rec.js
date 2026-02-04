@@ -33,72 +33,15 @@ const CONFIG = {
 function doPost(e) {
     try {
         const data = JSON.parse(e.postData.contents);
-        const audioData = data.audioData;
-        const mimeType = data.mimeType || 'audio/webm';
+        const action = data.action;
 
-        if (!audioData) throw new Error('No audio data received');
-
-        // ID Generation (YYMMDD_HHmmss)
-        const now = new Date();
-        const id = Utilities.formatDate(now, 'Asia/Tokyo', 'yyMMdd_HHmmss');
-        const formattedDate = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss');
-
-        // 1. Save Audio File
-        const decoded = Utilities.base64Decode(audioData);
-        const blob = Utilities.newBlob(decoded, mimeType, `${id}.webm`);
-        let audioFileId = '';
-        try {
-            const voiceFolder = DriveApp.getFolderById(CONFIG.VOICE_FOLDER_ID);
-            const audioFile = voiceFolder.createFile(blob);
-            audioFileId = audioFile.getId();
-        } catch (e) {
-            Logger.log('Audio Save Error: ' + e);
+        if (action === 'upload_chunk') {
+            return handleUploadChunk(data);
+        } else if (action === 'generate_script') {
+            return handleGenerateScript(data);
+        } else {
+            throw new Error('Invalid action: ' + action);
         }
-
-        // 2. Transcribe (STT)
-        const transcript = transcribeAudio(blob);
-        if (!transcript) throw new Error('Transcription failed');
-
-        // 3. Generate Video Plan (LLM)
-        const videoPlan = generateVideoPlan(transcript);
-        if (!videoPlan) throw new Error('Content generation failed');
-
-        // 4. Save Text File
-        let textFileId = '';
-        try {
-            const txtFolder = DriveApp.getFolderById(CONFIG.TXT_FOLDER_ID);
-            const textContent = `【ID】${id}\n【日時】${formattedDate}\n【音声ID】${audioFileId}\n\n【書き起こし】\n${transcript}\n\n【生成構成】\n${JSON.stringify(videoPlan, null, 2)}`;
-            const textFile = txtFolder.createFile(`${id}.txt`, textContent, MimeType.PLAIN_TEXT);
-            textFileId = textFile.getId();
-        } catch (e) {
-            Logger.log('Text Save Error: ' + e);
-        }
-
-        // 5. Save to Spreadsheet
-        try {
-            saveToSpreadsheet({
-                id: id,
-                created: formattedDate,
-                caption: videoPlan.caption,
-                hashtags: videoPlan.hashtags.join(', '),
-                textFileId: textFileId,
-                // videoFileId is empty for now as we haven't generated an MP4
-                videoFileId: ''
-            });
-        } catch (e) {
-            Logger.log('Sheet Save Error: ' + e);
-        }
-
-        // Return Success
-        return ContentService.createTextOutput(JSON.stringify({
-            status: 'success',
-            data: videoPlan,
-            meta: {
-                id: id,
-                audioId: audioFileId,
-                textId: textFileId
-            }
-        })).setMimeType(ContentService.MimeType.JSON);
 
     } catch (error) {
         return ContentService.createTextOutput(JSON.stringify({
@@ -107,6 +50,109 @@ function doPost(e) {
             stack: error.stack
         })).setMimeType(ContentService.MimeType.JSON);
     }
+}
+
+/**
+ * チャンクのアップロード処理
+ */
+function handleUploadChunk(data) {
+    const audioData = data.audioData;
+    const fileName = data.fileName;
+
+    if (!audioData || !fileName) throw new Error('Missing audioData or fileName');
+
+    const decoded = Utilities.base64Decode(audioData);
+    const blob = Utilities.newBlob(decoded, 'audio/webm', fileName);
+
+    const voiceFolder = DriveApp.getFolderById(CONFIG.VOICE_FOLDER_ID);
+    voiceFolder.createFile(blob);
+
+    return ContentService.createTextOutput(JSON.stringify({
+        status: 'success',
+        message: 'Chunk uploaded: ' + fileName
+    })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * 台本生成処理 (全チャンクを集約)
+ */
+function handleGenerateScript(data) {
+    const sessionId = data.sessionId;
+    if (!sessionId) throw new Error('Missing sessionId');
+
+    const now = new Date();
+    const formattedDate = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss');
+
+    // 1. 全てのチャンクを取得して結合
+    const voiceFolder = DriveApp.getFolderById(CONFIG.VOICE_FOLDER_ID);
+    const files = voiceFolder.getFiles();
+    let chunks = [];
+
+    while (files.hasNext()) {
+        const file = files.next();
+        const name = file.getName();
+        // マッチ: sessionId_chunkXX.webm
+        if (name.startsWith(sessionId) && name.endsWith('.webm')) {
+            chunks.push(file);
+        }
+    }
+
+    if (chunks.length === 0) throw new Error('No chunks found for session: ' + sessionId);
+
+    // チャンク順にソート
+    chunks.sort((a, b) => a.getName().localeCompare(b.getName()));
+
+    // 2. 各チャンクを文字起こしして結合
+    let fullTranscript = '';
+    chunks.forEach(file => {
+        const transcript = transcribeAudio(file.getBlob());
+        if (transcript) {
+            fullTranscript += transcript + '\n';
+        }
+    });
+
+    if (!fullTranscript.trim()) throw new Error('Transcription failed for all chunks');
+
+    // 3. 動画プラン生成
+    const videoPlan = generateVideoPlan(fullTranscript);
+    if (!videoPlan) throw new Error('Content generation failed');
+
+    // 4. テキストファイル保存 (結合された内容)
+    let textFileId = '';
+    try {
+        const txtFolder = DriveApp.getFolderById(CONFIG.TXT_FOLDER_ID);
+        const textContent = `【ID】${sessionId}\n【日時】${formattedDate}\n\n【書き起こし】\n${fullTranscript}\n\n【生成構成】\n${JSON.stringify(videoPlan, null, 2)}`;
+        const textFile = txtFolder.createFile(`${sessionId}.txt`, textContent, MimeType.PLAIN_TEXT);
+        textFileId = textFile.getId();
+    } catch (e) {
+        Logger.log('Text Save Error: ' + e);
+    }
+
+    // 5. スプレッドシート保存
+    try {
+        saveToSpreadsheet({
+            id: sessionId,
+            created: formattedDate,
+            caption: videoPlan.caption,
+            hashtags: videoPlan.hashtags.join(', '),
+            textFileId: textFileId,
+            videoFileId: ''
+        });
+    } catch (e) {
+        Logger.log('Sheet Save Error: ' + e);
+    }
+
+    // 6. 使用済みチャンクを削除 (またはアーカイブ)
+    chunks.forEach(file => file.setTrashed(true));
+
+    return ContentService.createTextOutput(JSON.stringify({
+        status: 'success',
+        data: videoPlan,
+        meta: {
+            id: sessionId,
+            textId: textFileId
+        }
+    })).setMimeType(ContentService.MimeType.JSON);
 }
 
 // ==========================================
