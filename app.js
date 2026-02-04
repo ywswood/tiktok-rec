@@ -1,7 +1,7 @@
-// Basic config - NEEDS DEPLOYMENT URL
+// Basic config
 const CONFIG = {
-    // Replace with your actual GAS Web App URL after deployment
-    API_URL: 'YOUR_GAS_WEB_APP_URL_HERE',
+    // Production GAS Web App URL
+    API_URL: 'https://script.google.com/macros/s/AKfycbwtKHqOYcbBRqe-fEqUqiag_oFjSlnkD8K5If-pIq5UjE386qQf47Rkdfe1LTmQdjhH9Q/exec',
     MIME_TYPE: 'audio/webm;codecs=opus'
 };
 
