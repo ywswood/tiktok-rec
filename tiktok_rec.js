@@ -163,67 +163,42 @@ function handleGenerateScript(data) {
 }
 
 // ==========================================
-// 3. Robust Gemini API Calling Logic
+// 3. API Bank Transcription (Align with sns_rec)
 // ==========================================
-
-/**
- * Gemini APIを呼び出す。API Bankによる負荷分散、503リトライ、レート制限をハンドルする。
- * @param {Object} options - { prompt, blob, mimeType, response_mime_type }
- * @returns {String|null} - 生成されたテキスト。失敗時は例外を投げるかnullを返す。
- */
-function callGeminiWithRetry(options) {
-    const { prompt, blob, mimeType, response_mime_type } = options;
-    const MAX_RETRIES = 3;
+function transcribeAudio(blob) {
     let previousModel = null;
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 2000;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        Logger.log(`🔄 Gemini API Call (Attempt ${attempt}/${MAX_RETRIES})`);
-
-        // 1. API Bankからキーとモデルを取得
-        let bankUrl = `${CONFIG.BANK_URL}?pass=${CONFIG.BANK_PASS}&project=${CONFIG.PROJECT_NAME}`;
-        if (previousModel) {
-            bankUrl += `&error_503=true&previous_model=${encodeURIComponent(previousModel)}`;
-        }
-
-        const bankRes = UrlFetchApp.fetch(bankUrl, { muteHttpExceptions: true });
-        const bankData = JSON.parse(bankRes.getContentText());
-
-        if (bankData.status === 'rate_limited') {
-            const waitMs = bankData.wait_ms || 5000;
-            Logger.log(`⏳ Rate Limited. Waiting ${waitMs}ms...`);
-            Utilities.sleep(waitMs);
-            attempt--; // 回数をカウントせずリトライ
-            continue;
-        }
-
-        if (bankData.status !== 'success') {
-            throw new Error(`API Bank Error: ${bankData.message}`);
-        }
-
-        const { api_key, model_name } = bankData;
-        Logger.log(`📦 Model: ${model_name}`);
-
         try {
-            // 2. Gemini API 呼び出し
+            // 1. APIキー取得
+            let bankUrl = `${CONFIG.BANK_URL}?pass=${CONFIG.BANK_PASS}&project=${CONFIG.PROJECT_NAME}&type=stt`;
+            if (previousModel) {
+                bankUrl += `&error_503=true&previous_model=${encodeURIComponent(previousModel)}`;
+            }
+
+            const bankRes = UrlFetchApp.fetch(bankUrl, { muteHttpExceptions: true });
+            const bankData = JSON.parse(bankRes.getContentText());
+
+            if (bankData.status !== 'success') {
+                throw new Error(bankData.message);
+            }
+
+            const { api_key, model_name } = bankData;
+
+            // 2. Gemini呼び出し
+            const base64Audio = Utilities.base64Encode(blob.getBytes());
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model_name}:generateContent?key=${api_key}`;
 
-            const parts = [{ text: prompt }];
-            if (blob) {
-                parts.push({
-                    inline_data: {
-                        mime_type: mimeType || blob.getContentType(),
-                        data: Utilities.base64Encode(blob.getBytes())
-                    }
-                });
-            }
-
             const payload = {
-                contents: [{ parts: parts }]
+                contents: [{
+                    parts: [
+                        { text: "音声を書き起こしてください。フィラー（えー、あー）は取り除いてください。" },
+                        { inline_data: { mime_type: blob.getContentType(), data: base64Audio } }
+                    ]
+                }]
             };
-
-            if (response_mime_type) {
-                payload.generationConfig = { response_mime_type: response_mime_type };
-            }
 
             const geminiRes = UrlFetchApp.fetch(apiUrl, {
                 method: 'post',
@@ -234,50 +209,29 @@ function callGeminiWithRetry(options) {
 
             const statusCode = geminiRes.getResponseCode();
 
-            // 503エラーは次のモデルでリトライ
             if (statusCode === 503) {
-                Logger.log(`⚠️ 503 Error (Service Unavailable).`);
                 previousModel = model_name;
-                Utilities.sleep(2000);
+                Utilities.sleep(RETRY_DELAY);
                 continue;
             }
 
-            const resData = JSON.parse(geminiRes.getContentText());
-            if (resData.error || !resData.candidates || resData.candidates.length === 0) {
-                Logger.log("❌ Gemini API Error: " + JSON.stringify(resData));
-                reportError(api_key); // 503以外は報告
-                throw new Error(resData.error ? resData.error.message : 'No candidates');
+            const geminiData = JSON.parse(geminiRes.getContentText());
+            if (geminiData.error) {
+                reportError(api_key);
+                throw new Error(JSON.stringify(geminiData.error));
             }
 
-            // 成功
-            return resData.candidates[0].content.parts[0].text;
+            return { text: geminiData.candidates[0].content.parts[0].text };
 
-        } catch (e) {
-            Logger.log(`❌ Exception: ${e}`);
-            if (attempt === MAX_RETRIES) throw e;
-            Utilities.sleep(2000);
+        } catch (error) {
+            if (attempt === MAX_RETRIES) return { error: error.toString() };
+            Utilities.sleep(RETRY_DELAY);
         }
     }
-    return null;
 }
 
 /**
- * 音声を文字起こしする
- */
-function transcribeAudio(blob) {
-    try {
-        const text = callGeminiWithRetry({
-            prompt: "音声を文字起こししてください。フィラーは除去してください。",
-            blob: blob
-        });
-        return { text: text };
-    } catch (e) {
-        return { error: e.toString() };
-    }
-}
-
-/**
- * 動画プランを生成する
+ * 動画プランを生成する (Gemini LLM)
  */
 function generateVideoPlan(transcript) {
     const SYSTEM_PROMPT = `
@@ -297,16 +251,66 @@ function generateVideoPlan(transcript) {
 必ずJSON形式で出力してください。Markdownのコードブロックは不要です。
 `;
 
-    try {
-        const rawText = callGeminiWithRetry({
-            prompt: SYSTEM_PROMPT + "\n\n【音声内容】\n" + transcript,
-            response_mime_type: "application/json"
-        });
-        const cleanText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-        return JSON.parse(cleanText);
-    } catch (e) {
-        Logger.log('Content Generation Error: ' + e);
-        return null;
+    let previousModel = null;
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 2000;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            // 1. APIキー取得
+            let bankUrl = `${CONFIG.BANK_URL}?pass=${CONFIG.BANK_PASS}&project=${CONFIG.PROJECT_NAME}`;
+            if (previousModel) {
+                bankUrl += `&error_503=true&previous_model=${encodeURIComponent(previousModel)}`;
+            }
+
+            const bankRes = UrlFetchApp.fetch(bankUrl, { muteHttpExceptions: true });
+            const bankData = JSON.parse(bankRes.getContentText());
+
+            if (bankData.status !== 'success') {
+                throw new Error(bankData.message);
+            }
+
+            const { api_key, model_name } = bankData;
+
+            // 2. Gemini呼び出し
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model_name}:generateContent?key=${api_key}`;
+            const payload = {
+                contents: [{ parts: [{ text: SYSTEM_PROMPT + "\n\n【音声内容】\n" + transcript }] }],
+                generationConfig: { response_mime_type: "application/json" }
+            };
+
+            const geminiRes = UrlFetchApp.fetch(apiUrl, {
+                method: 'post',
+                contentType: 'application/json',
+                payload: JSON.stringify(payload),
+                muteHttpExceptions: true
+            });
+
+            const statusCode = geminiRes.getResponseCode();
+
+            if (statusCode === 503) {
+                previousModel = model_name;
+                Utilities.sleep(RETRY_DELAY);
+                continue;
+            }
+
+            const geminiData = JSON.parse(geminiRes.getContentText());
+            if (geminiData.error) {
+                reportError(api_key);
+                throw new Error(JSON.stringify(geminiData.error));
+            }
+
+            const rawText = geminiData.candidates[0].content.parts[0].text;
+            const cleanText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+            return JSON.parse(cleanText);
+
+        } catch (error) {
+            if (attempt === MAX_RETRIES) {
+                Logger.log('Content Generation Error: ' + error);
+                return null;
+            }
+            Utilities.sleep(RETRY_DELAY);
+        }
     }
 }
 
