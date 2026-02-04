@@ -109,7 +109,7 @@ async function processAudio() {
 
             const response = await fetch(CONFIG.API_URL, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                // HEADERS REMOVED TO PREVENT CORS PREFLIGHT OPTION FAILURES
                 body: JSON.stringify({
                     audioData: base64data,
                     mimeType: CONFIG.MIME_TYPE
