@@ -322,6 +322,7 @@ function saveToSpreadsheet(data) {
     const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
     if (!sheet) throw new Error(`Sheet '${CONFIG.SHEET_NAME}' not found`);
 
+    // カラム構成: ID, 作成日時, 投稿予定日, 投稿日, ステータス, 本文, ハッシュタグ, 動画ファイルID, 音声テキストID, 備考, ビデオ生成状況
     sheet.appendRow([
         data.id,              // ID
         data.created,         // 作成日時
@@ -332,7 +333,8 @@ function saveToSpreadsheet(data) {
         data.hashtags,        // ハッシュタグ
         data.videoFileId,     // 動画ファイルID
         data.textFileId,      // 音声テキストID
-        ''                    // 備考
+        '',                   // 備考
+        'PENDING'             // ビデオ生成状況
     ]);
 }
 
