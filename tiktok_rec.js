@@ -104,14 +104,21 @@ function handleGenerateScript(data) {
 
     // 2. 各チャンクを文字起こしして結合
     let fullTranscript = '';
+    let errors = [];
+
     chunks.forEach(file => {
-        const transcript = transcribeAudio(file.getBlob());
-        if (transcript) {
-            fullTranscript += transcript + '\n';
+        const result = transcribeAudio(file.getBlob());
+        if (result.text) {
+            fullTranscript += result.text + '\n';
+        } else {
+            errors.push(`${file.getName()}: ${result.error || 'Unknown error'}`);
+            if (result.details) Logger.log(JSON.stringify(result.details));
         }
     });
 
-    if (!fullTranscript.trim()) throw new Error('Transcription failed for all chunks');
+    if (!fullTranscript.trim()) {
+        throw new Error('Transcription failed for all chunks. Errors: ' + errors.join(', '));
+    }
 
     // 3. 動画プラン生成
     const videoPlan = generateVideoPlan(fullTranscript);
@@ -158,9 +165,15 @@ function handleGenerateScript(data) {
 // ==========================================
 // 3. Speech to Text (via API Bank)
 // ==========================================
+// ==========================================
+// 3. Speech to Text (via API Bank)
+// ==========================================
 function transcribeAudio(blob) {
     const bankRes = getApiKey('stt');
-    if (!bankRes) return null;
+    if (!bankRes) {
+        Logger.log('STT Error: No API Key available');
+        return { error: 'No API Key' };
+    }
 
     const { api_key, model_name } = bankRes;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model_name}:generateContent?key=${api_key}`;
@@ -182,17 +195,21 @@ function transcribeAudio(blob) {
             muteHttpExceptions: true
         });
 
-        if (res.getResponseCode() === 503) return null; // Simple retry logic omitted for brevity
+        if (res.getResponseCode() === 503) {
+            return { error: '503 Service Unavailable' };
+        }
 
         const json = JSON.parse(res.getContentText());
         if (json.candidates && json.candidates[0].content) {
-            return json.candidates[0].content.parts[0].text;
+            return { text: json.candidates[0].content.parts[0].text };
+        } else {
+            return { error: 'No content generated (Silence or Filtered)', details: json };
         }
     } catch (e) {
         reportError(api_key);
         Logger.log('STT Error: ' + e);
+        return { error: e.toString() };
     }
-    return null;
 }
 
 // ==========================================
