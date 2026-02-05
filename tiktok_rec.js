@@ -18,7 +18,10 @@ const CONFIG = {
     // Folders
     VOICE_FOLDER_ID: PROPS.VOICE_FOLDER_ID,
     TXT_FOLDER_ID: PROPS.TXT_FOLDER_ID,
-    VIDEO_FOLDER_ID: PROPS.VIDEO_FOLDER_ID, // 予約（将来用または手動アップロード用）
+    VIDEO_FOLDER_ID: PROPS.VIDEO_FOLDER_ID,
+    BGM_FOLDER_ID: '1BXb_30bw7BOd9ujqdteinIua8Lu3AOLb',
+    BGM_ENERGY_ID: '1YgMO7vUiYirDdTVb2v4eIksyN6A9KDEx',
+    BGM_CHILL_ID: '1EI_4DLWI8jrBREt0c-d5eD4tkl8dtxY5',
 
     // Spreadsheet
     SPREADSHEET_ID: PROPS.SPREADSHEET_ID,
@@ -140,8 +143,10 @@ function handleGenerateScript(data) {
         saveToSpreadsheet({
             id: sessionId,
             created: formattedDate,
-            caption: videoPlan.caption,
+            caption_ja: videoPlan.caption_ja,
+            caption_en: videoPlan.caption_en,
             hashtags: videoPlan.hashtags.join(', '),
+            bgm: videoPlan.bgm,
             textFileId: textFileId,
             videoFileId: ''
         });
@@ -235,20 +240,26 @@ function transcribeAudio(blob) {
  */
 function generateVideoPlan(transcript) {
     const SYSTEM_PROMPT = `
-以下の要素を生成してください：
-1. hook: 冒頭0.5秒で目を引く、強いキャッチコピー。
-2. scenes: 動画を5〜7枚のカードに分割。各カードは10文字以内。リズムを重視。シーンごとの秒数(duration)も推定。
-3. caption: 投稿本文（共感を得る文章）。
-4. hashtags: 5つのトレンドタグ。
-5. design: 動画のデザインテーマ。以下のバリエーションから、音声の内容や雰囲気に最も合うものを1つずつ選択（またはランダムに選択）してください。
+以下の要素を英語ベース（キャプションは日英併記）で生成してください：
+1. hook: 英語。冒頭0.5秒で目を引く、強いキャッチコピー。
+2. scenes: 音声を「英語」に翻訳・要約し、15〜30秒に収まるように5〜8つのシーンに分割。
+   各シーンは以下の3要素を含める：
+   - text_en: 英語（メイン字幕）。15文字以内。
+   - text_ja: 日本語（サブ字幕）。最短要約。
+   - duration: そのシーンの継続秒数（合計15〜30秒）。
+3. caption_ja: 日本語の投稿本文（共感を得る文章）。
+4. caption_en: 英語の投稿本文。
+5. hashtags: 5つのトレンドタグ（英語）。
+6. bgm: 動画の内容に最も合うBGMジャンルを1つ選択 ["chill", "energy", "calm", "upbeat", "sad"]。
+7. design: 動画のデザインテーマ（バリエーションから選択）。
+   - animation: ["pop", "slide", "zoom", "fade", "typewriter"]
+   - effect: ["neon", "glitch", "retro", "particle", "simple"]
+   - font: ["impact", "mincho", "handwriting", "cyber", "scatter"]
+   - theme: { background: "css gradient", textColor: "hex", accentColor: "hex" }
 
-【デザインバリエーション】
-- animation: ["pop", "slide", "zoom", "fade", "typewriter"]
-- effect: ["neon", "glitch", "retro", "particle", "simple"]
-- font: ["impact", "mincho", "handwriting", "cyber", "scatter"]
-- theme: { background: "css gradient", textColor: "hex", accentColor: "hex" }
-
-必ずJSON形式で出力してください。Markdownのコードブロックは不要です。
+【ルール】
+- 無駄な言葉は徹底的に削除し、TikTokで好まれるリズム感のある現代的な表現にすること。
+- 必ずJSON形式で出力してください。Markdownのコードブロックは不要です。
 `;
 
     let previousModel = null;
@@ -322,19 +333,20 @@ function saveToSpreadsheet(data) {
     const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
     if (!sheet) throw new Error(`Sheet '${CONFIG.SHEET_NAME}' not found`);
 
-    // カラム構成: ID, 作成日時, 投稿予定日, 投稿日, ステータス, 本文, ハッシュタグ, 動画ファイルID, 音声テキストID, 備考, ビデオ生成状況
+    // カラム構成: ID, 作成日時, 投稿予定日, 投稿日, ステータス, 本文（和）, 本文（英）, ハッシュタグ, BGM, 動画ファイルID, 音声テキストID, 備考
     sheet.appendRow([
         data.id,              // ID
         data.created,         // 作成日時
         '',                   // 投稿予定日
         '',                   // 投稿日
         '下書き',             // ステータス
-        data.caption,         // 本文
+        data.caption_ja,      // 本文（和）
+        data.caption_en,      // 本文（英）
         data.hashtags,        // ハッシュタグ
+        data.bgm,             // BGM
         data.videoFileId,     // 動画ファイルID
         data.textFileId,      // 音声テキストID
-        '',                   // 備考
-        'PENDING'             // ビデオ生成状況
+        ''                    // 備考
     ]);
 }
 

@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+data/
+logs/
+.agent/
+.gemini/
+*.mp4
+*.wav
+*.txt
+!動画作成.txt
