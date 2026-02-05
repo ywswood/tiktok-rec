@@ -3,7 +3,7 @@ const CONFIG = {
     // Production GAS Web App URL
     API_URL: 'https://script.google.com/macros/s/AKfycbwtKHqOYcbBRqe-fEqUqiag_oFjSlnkD8K5If-pIq5UjE386qQf47Rkdfe1LTmQdjhH9Q/exec',
     MIME_TYPE: 'audio/webm;codecs=opus',
-    CHUNK_DURATION: 30 * 1000, // 30秒ごとにアップロード（TikTok用なので短めに設定）
+    CHUNK_DURATION: 5 * 60 * 1000, // 5分ごとにアップロード
     FILE_EXTENSION: '.webm'
 };
 
@@ -33,32 +33,18 @@ const els = {
     appHeader: document.getElementById('appHeader'),
     recButton: document.getElementById('recButton'),
     recText: document.getElementById('recText'),
-    videoContainer: document.getElementById('videoContainer'),
-    videoScreen: document.getElementById('videoScreen'),
-    videoBg: document.getElementById('videoBg'),
-    sceneText: document.getElementById('sceneText'),
-    status: document.getElementById('status'),
-    resultControls: document.getElementById('resultControls'),
-    resetBtn: document.getElementById('resetBtn'),
-    copyBtn: document.getElementById('copyBtn'),
-    resHook: document.getElementById('resHook'),
-    resTags: document.getElementById('resTags'),
-    resCaption: document.getElementById('resCaption')
+    status: document.getElementById('status')
 };
 
 /* =========================================
    EVENT LISTENERS
    ========================================= */
 els.recButton.addEventListener('click', toggleRecording);
-els.resetBtn.addEventListener('click', resetApp);
-els.copyBtn.addEventListener('click', copyToClipboard);
 
 /* =========================================
    RECORDING LOGIC
    ========================================= */
 async function toggleRecording() {
-    if (state.generatedData) return;
-
     if (!state.isRecording) {
         // START
         try {
@@ -198,7 +184,11 @@ async function handleFinalGeneration() {
         });
         const result = await response.json();
         if (result.status === 'success') {
-            handleSuccess(result.data);
+            els.status.innerText = '送信完了。サーバーで生成を開始しました。';
+            setTimeout(() => {
+                resetApp();
+                els.status.innerText = '次の録音を開始できます';
+            }, 3000);
         } else {
             throw new Error(result.message);
         }
@@ -223,117 +213,11 @@ function formatDate(date) {
     return `${year}${month}${day}`;
 }
 
-/* =========================================
-   RENDERING LOGIC
-   ========================================= */
-function handleSuccess(data) {
-    state.generatedData = data;
-
-    // 1. Switch UI Mode
-    els.appHeader.classList.add('hidden');
-    els.recButton.parentNode.style.display = 'none'; // Hide main-area's recButton part safely
-    // Actually, we need to hide just the button, show the video container.
-    // The video container is INSIDE main-area.
-    els.recButton.style.display = 'none';
-
-    els.videoContainer.classList.remove('hidden');
-    els.videoContainer.style.display = 'flex';
-
-    els.resultControls.classList.remove('hidden');
-    els.status.innerText = '再生中';
-
-    // 2. Fill Data
-    els.resHook.innerText = data.hook || '';
-    els.resTags.innerText = (data.hashtags || []).join(' ');
-    els.resCaption.innerText = data.caption || '';
-
-    // 3. Apply Design & Play
-    applyTheme(data.design);
-    playVideoSequence();
-}
-
-function applyTheme(design) {
-    if (!design) return;
-
-    // Background
-    if (design.theme && design.theme.background) {
-        els.videoBg.style.background = design.theme.background;
-    }
-
-    // Text Style
-    els.sceneText.style.color = (design.theme && design.theme.textColor) ? design.theme.textColor : '#ffffff';
-
-    // Classes
-    els.sceneText.className = 'scene-text'; // Reset
-    if (design.font) els.sceneText.classList.add(`font-${design.font}`);
-    if (design.effect) els.sceneText.classList.add(`effect-${design.effect}`);
-
-    state.currentAnimationClass = `anim-${design.animation || 'pop'}`;
-}
-
-function playVideoSequence() {
-    if (!state.generatedData || !state.generatedData.scenes) return;
-
-    const scenes = state.generatedData.scenes;
-    let idx = 0;
-
-    clearTimeout(state.animationInterval);
-
-    function showNextScene() {
-        if (idx >= scenes.length) {
-            els.status.innerText = '再生終了';
-            // Loop or stop? Let's stop for now.
-            return;
-        }
-
-        const scene = scenes[idx];
-
-        // Set Text
-        els.sceneText.innerText = scene.text;
-        els.sceneText.setAttribute('data-text', scene.text);
-
-        // Animate
-        els.sceneText.classList.remove(state.currentAnimationClass);
-        void els.sceneText.offsetWidth; // Reflow
-        els.sceneText.classList.add(state.currentAnimationClass);
-
-        // Default duration calculation if missing
-        const dur = (scene.duration || 2) * 1000;
-
-        idx++;
-        state.animationInterval = setTimeout(showNextScene, dur);
-    }
-
-    showNextScene();
-}
-
 function resetApp() {
-    // Reset State
-    state.generatedData = null;
     state.isRecording = false;
     state.audioChunks = [];
-    clearTimeout(state.animationInterval);
-
-    // Reset UI
-    els.videoContainer.classList.add('hidden');
-    els.videoContainer.style.display = 'none';
-
     els.appHeader.classList.remove('hidden');
-
-    els.recButton.style.display = 'flex'; // Restore button
-    els.recButton.parentNode.style.display = 'flex'; // Restore wrapper area if hidden
-
-    els.resultControls.classList.add('hidden');
-
+    els.recButton.style.display = 'flex';
     els.status.innerText = 'タップして録音を開始';
     els.recText.innerText = 'RECORDING';
-}
-
-function copyToClipboard() {
-    if (!state.generatedData) return;
-    const data = state.generatedData;
-    const text = `${data.caption}\n\n${(data.hashtags || []).join(' ')}`;
-    navigator.clipboard.writeText(text).then(() => {
-        alert('キャプションとタグをコピーしました！');
-    });
 }

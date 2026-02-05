@@ -9,3 +9,4 @@ logs/
 *.wav
 *.txt
 !動画作成.txt
+debug_run.log
