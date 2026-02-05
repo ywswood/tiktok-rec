@@ -26,8 +26,6 @@ const CONFIG = {
     // Spreadsheet
     SPREADSHEET_ID: PROPS.SPREADSHEET_ID,
     SHEET_NAME: 'txt',
-
-    GEMINI_MODEL: 'gemini-2.5-flash'
 };
 
 // ==========================================
@@ -35,22 +33,22 @@ const CONFIG = {
 // ==========================================
 function doPost(e) {
     try {
-        const data = JSON.parse(e.postData.contents);
-        const action = data.action;
-
-        if (action === 'upload_chunk') {
-            return handleUploadChunk(data);
-        } else if (action === 'generate_script') {
-            return handleGenerateScript(data);
-        } else {
-            throw new Error('Invalid action: ' + action);
+        if (!e || !e.postData || !e.postData.contents) {
+            throw new Error('Missing postData. Please call this as a POST request from the app.');
         }
 
+        const data = JSON.parse(e.postData.contents);
+        const action = data.action;
+        console.log('Queuing action:', action);
+
+        // すべてのアクションを非同期タスクとしてキューイング
+        return queueTask(data);
+
     } catch (error) {
+        console.error('doPost error:', error.toString());
         return ContentService.createTextOutput(JSON.stringify({
             status: 'error',
-            message: error.toString(),
-            stack: error.stack
+            message: error.toString()
         })).setMimeType(ContentService.MimeType.JSON);
     }
 }
@@ -59,6 +57,9 @@ function doPost(e) {
  * チャンクのアップロード処理
  */
 function handleUploadChunk(data) {
+    if (!data) {
+        throw new Error('handleUploadChunk: data is undefined. If running from editor, please select doPost instead and use test parameters.');
+    }
     const audioData = data.audioData;
     const fileName = data.fileName;
 
@@ -127,6 +128,28 @@ function handleGenerateScript(data) {
     const videoPlan = generateVideoPlan(fullTranscript);
     if (!videoPlan) throw new Error('Content generation failed');
 
+    // 3.5. TTS生成 & BGM選定 (New logic)
+    let audioFileId = '';
+    try {
+        // AIが要約・翻訳した各シーンの英語テキストを抽出して結合
+        const ttsText = videoPlan.scenes.map(s => s.text_en || s.text || '').join(' ');
+        const voiceBlob = generateTTS(ttsText);
+        if (voiceBlob) {
+            const voiceFolder = DriveApp.getFolderById(CONFIG.VOICE_FOLDER_ID);
+            const audioFile = voiceFolder.createFile(voiceBlob).setName(`${sessionId}_voice.wav`);
+            audioFileId = audioFile.getId();
+        }
+    } catch (e) {
+        Logger.log('TTS Generation Error: ' + e);
+    }
+
+    let bgmFileId = '';
+    try {
+        bgmFileId = selectBGM(videoPlan.bgm);
+    } catch (e) {
+        Logger.log('BGM Selection Error: ' + e);
+    }
+
     // 4. テキストファイル保存 (結合された内容)
     let textFileId = '';
     try {
@@ -147,6 +170,8 @@ function handleGenerateScript(data) {
             caption_en: videoPlan.caption_en,
             hashtags: videoPlan.hashtags.join(', '),
             bgm: videoPlan.bgm,
+            bgmFileId: bgmFileId,    // 追加
+            audioFileId: audioFileId, // 追加
             textFileId: textFileId,
             videoFileId: ''
         });
@@ -250,7 +275,7 @@ function generateVideoPlan(transcript) {
 3. caption_ja: 日本語の投稿本文（共感を得る文章）。
 4. caption_en: 英語の投稿本文。
 5. hashtags: 5つのトレンドタグ（英語）。
-6. bgm: 動画の内容に最も合うBGMジャンルを1つ選択 ["chill", "energy", "calm", "upbeat", "sad"]。
+6. bgm: 動画の内容に最も合うBGMジャンルを1つ選択 ["chill", "energy"]。
 7. design: 動画のデザインテーマ（バリエーションから選択）。
    - animation: ["pop", "slide", "zoom", "fade", "typewriter"]
    - effect: ["neon", "glitch", "retro", "particle", "simple"]
@@ -333,7 +358,8 @@ function saveToSpreadsheet(data) {
     const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
     if (!sheet) throw new Error(`Sheet '${CONFIG.SHEET_NAME}' not found`);
 
-    // カラム構成: ID, 作成日時, 投稿予定日, 投稿日, ステータス, 本文（和）, 本文（英）, ハッシュタグ, BGM, 動画ファイルID, 音声テキストID, 備考
+    // カラム構成: ID, 作成日時, 投稿予定日, 投稿日, ステータス, 本文（和）, 本文（英）, ハッシュタグ, BGM, 音声テキストID, 動画ファイルID, 備考
+    // 拡張カラム考慮: [BGM_FILE_ID, AUDIO_FILE_ID] を追加
     sheet.appendRow([
         data.id,              // ID
         data.created,         // 作成日時
@@ -343,10 +369,12 @@ function saveToSpreadsheet(data) {
         data.caption_ja,      // 本文（和）
         data.caption_en,      // 本文（英）
         data.hashtags,        // ハッシュタグ
-        data.bgm,             // BGM
-        data.videoFileId,     // 動画ファイルID
-        data.textFileId,      // 音声テキストID
-        ''                    // 備考
+        data.videoFileId,     // 動画ファイルID (Col I)
+        data.textFileId,      // 音声テキストID (Col J)
+        data.bgm,             // BGM (Col K)
+        '',                   // 備考 (Col L)
+        data.bgmFileId,       // BGMファイルID (Col M)
+        data.audioFileId      // 音声ファイルID (Col N)
     ]);
 }
 
@@ -361,4 +389,183 @@ function reportError(key) {
             payload: JSON.stringify({ pass: CONFIG.BANK_PASS, api_key: key })
         });
     } catch (e) { }
+}
+
+/**
+ * 音声合成 (TTS) を実行する (Gemini Multimodal TTS)
+ */
+function generateTTS(text) {
+    let previousModel = null;
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 1000;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            // 1. APIキー取得 (type=tts)
+            let bankUrl = `${CONFIG.BANK_URL}?pass=${CONFIG.BANK_PASS}&project=${CONFIG.PROJECT_NAME}&type=tts`;
+            if (previousModel) {
+                bankUrl += `&error_503=true&previous_model=${encodeURIComponent(previousModel)}`;
+            }
+
+            const bankRes = UrlFetchApp.fetch(bankUrl, { muteHttpExceptions: true });
+            const bankData = JSON.parse(bankRes.getContentText());
+
+            if (bankData.status !== 'success') throw new Error(bankData.message);
+
+            const { api_key, model_name } = bankData;
+
+            // 2. Gemini呼び出し (Multimodal TTS)
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model_name}:generateContent?key=${api_key}`;
+            const payload = {
+                contents: [{ parts: [{ text: text }] }],
+                generationConfig: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: {
+                                voiceName: "Puck" // TikTokで人気の高い男性ボイス
+                            }
+                        }
+                    }
+                }
+            };
+
+            const res = UrlFetchApp.fetch(apiUrl, {
+                method: 'post',
+                contentType: 'application/json',
+                payload: JSON.stringify(payload),
+                muteHttpExceptions: true
+            });
+
+            if (res.getResponseCode() === 503) {
+                previousModel = model_name;
+                Utilities.sleep(RETRY_DELAY);
+                continue;
+            }
+
+            const resData = JSON.parse(res.getContentText());
+            if (resData.error) {
+                reportError(api_key);
+                throw new Error(JSON.stringify(resData.error));
+            }
+
+            // 音声バイナリの抽出
+            const base64Audio = resData.candidates[0].content.parts[0].inlineData.data;
+            const audioBytes = Utilities.base64Decode(base64Audio);
+
+            return Utilities.newBlob(audioBytes, 'audio/wav', 'voice.wav');
+
+        } catch (error) {
+            if (attempt === MAX_RETRIES) throw error;
+            Utilities.sleep(RETRY_DELAY);
+        }
+    }
+}
+
+/**
+ * 指定されたジャンルのBGMをDriveから選択
+ */
+function selectBGM(genre) {
+    const genreUpper = (genre || 'CHILL').toUpperCase();
+    const folderId = CONFIG[`BGM_${genreUpper}_ID`] || CONFIG.BGM_FOLDER_ID;
+
+    try {
+        const folder = DriveApp.getFolderById(folderId);
+        const files = folder.getFiles();
+        let list = [];
+        while (files.hasNext()) {
+            list.push(files.next());
+        }
+        if (list.length === 0) return '';
+        const selected = list[Math.floor(Math.random() * list.length)];
+        return selected.getId();
+    } catch (e) {
+        Logger.log('BGM Select Error: ' + e);
+        return '';
+    }
+}
+
+/**
+ * タスクをキューに入れ、トリガーを設定する
+ */
+function queueTask(params) {
+    const props = PropertiesService.getScriptProperties();
+    const taskId = 'TASK_' + Utilities.getUuid();
+
+    // タスク内容を保存
+    props.setProperty(taskId, JSON.stringify(params));
+
+    // キューリストに追加
+    let queue = JSON.parse(props.getProperty('TASK_QUEUE') || '[]');
+    queue.push(taskId);
+    props.setProperty('TASK_QUEUE', JSON.stringify(queue));
+
+    // トリガー作成（既存の実行待ちがあれば削除して再作成）
+    deleteExistingTriggers('processTaskQueue');
+    ScriptApp.newTrigger('processTaskQueue')
+        .timeBased()
+        .after(500) // 0.5秒後に開始
+        .create();
+
+    return ContentService.createTextOutput(JSON.stringify({
+        status: 'success',
+        message: 'Task queued',
+        taskId: taskId
+    })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * トリガーによって実行されるタスク処理（メインワーカー）
+ */
+function processTaskQueue() {
+    const props = PropertiesService.getScriptProperties();
+    let queue = JSON.parse(props.getProperty('TASK_QUEUE') || '[]');
+
+    if (queue.length === 0) return;
+
+    // 1つの実行で最大3つのタスクを処理（効率化のため。ただしタイムアウトに注意）
+    for (let i = 0; i < 3 && queue.length > 0; i++) {
+        const taskId = queue.shift();
+        props.setProperty('TASK_QUEUE', JSON.stringify(queue));
+
+        const paramsStr = props.getProperty(taskId);
+        if (!paramsStr) continue;
+
+        const params = JSON.parse(paramsStr);
+        try {
+            console.log(`Processing ${params.action} (${taskId})...`);
+
+            if (params.action === 'upload_chunk') {
+                handleUploadChunk(params);
+            } else if (params.action === 'generate_script') {
+                handleGenerateScript(params);
+            }
+
+            console.log(`Completed ${params.action}`);
+        } catch (e) {
+            console.error(`Task ${taskId} failed: ${e.toString()}`);
+        } finally {
+            props.deleteProperty(taskId);
+        }
+    }
+
+    // まだキューが残っていれば次のトリガーを設定（1秒後）
+    if (queue.length > 0) {
+        ScriptApp.newTrigger('processTaskQueue')
+            .timeBased()
+            .after(1000)
+            .create();
+    }
+}
+
+/**
+ * 特定の関数名を持つトリガーをすべて削除
+ */
+function deleteExistingTriggers(functionName) {
+    const triggers = ScriptApp.getProjectTriggers();
+    triggers.forEach(t => {
+        if (t.getHandlerFunction() === functionName) {
+            ScriptApp.deleteTrigger(t);
+        }
+    });
 }

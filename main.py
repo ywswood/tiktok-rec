@@ -8,7 +8,7 @@ import json
 import time
 import requests
 from dotenv import load_dotenv
-from video_generator import get_tts_audio, render_typography_video, get_random_bgm
+from video_generator import render_typography_video
 
 # ==========================================
 # 1. Configuration
@@ -20,6 +20,7 @@ CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 REFRESH_TOKEN = os.getenv("GOOGLE_REFRESH_TOKEN")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 VIDEO_FOLDER_ID = os.getenv("DRIVE_FOLDER_ID")
+ARCH_FOLDER_ID = "1rLHjrtLcbjwX-gtmlwCiN2W9h7AjvEo" # アーカイブフォルダ (Script property ARCH_FOLDER_ID)
 
 SHEET_NAME = "txt"
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -48,7 +49,7 @@ def get_access_token() -> str:
 # ==========================================
 def get_pending_rows(token: str) -> list:
     """動画ファイルIDが空の行を取得（カラムI = index 8）"""
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}/values/{SHEET_NAME}!A:L"
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}/values/{SHEET_NAME}!A:N"
     headers = {"Authorization": f"Bearer {token}"}
     print(f"DEBUG: Fetching from {SHEET_NAME}...")
     res = requests.get(url, headers=headers, timeout=30)
@@ -59,16 +60,17 @@ def get_pending_rows(token: str) -> list:
     if not rows:
         print(f"DEBUG: No data found in sheet '{SHEET_NAME}'")
         return []
-
     pending = []
     for i, row in enumerate(rows[1:], start=2):  # Skip header, 1-indexed for Sheets API
-        # カラムK (index 10) までデータがあるか確認
-        if len(row) > 10:
-            bgm = row[8] if len(row) > 8 else "chill"          # カラムI (index 8)
-            video_file_id = row[9] if len(row) > 9 else ""     # カラムJ (index 9)
-            text_file_id = row[10] if len(row) > 10 else ""    # カラムK (index 10)
+        # 少なくともカラムJ（index 9: 音声テキストID）までは存在することを確認
+        if len(row) >= 10:
+            video_id = row[8] if len(row) > 8 else ""          # カラムI (index 8)
+            text_id = row[9] if len(row) > 9 else ""           # カラムJ (index 9)
+            bgm = row[10] if len(row) > 10 else "chill"        # カラムK (index 10)
             
-            if not video_file_id and text_file_id:
+            # 動画IDが空、かつテキストIDが入っている行を「未処理」とする
+            if not video_id and text_id:
+                print(f"DEBUG: Row {i} is PENDING (text_id={text_id})")
                 pending.append({
                     "row_num": i,
                     "id": row[0],
@@ -76,16 +78,22 @@ def get_pending_rows(token: str) -> list:
                     "caption_en": row[6] if len(row) > 6 else "",
                     "hashtags": row[7] if len(row) > 7 else "",
                     "bgm": bgm,
-                    "text_file_id": text_file_id
+                    "text_file_id": text_id,
+                    "bgm_file_id": row[12] if len(row) > 12 else "",   # カラムM (index 12)
+                    "audio_file_id": row[13] if len(row) > 13 else ""  # カラムN (index 13)
                 })
+            elif video_id:
+                pass # Already processed
+            elif not text_id:
+                pass # No text yet
     return pending
 
 def update_video_file_id(token: str, row_num: int, video_file_id: str):
-    """スプシの動画ファイルIDを更新（カラムJ = index 9）"""
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}/values/{SHEET_NAME}!J{row_num}?valueInputOption=RAW"
+    """スプシの動画ファイルIDを更新（カラムI = index 8）"""
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}/values/{SHEET_NAME}!I{row_num}?valueInputOption=RAW"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     body = {"values": [[video_file_id]]}
-    print(f"DEBUG: Updating Sheet Row {row_num} (Column J) with {video_file_id}...")
+    print(f"DEBUG: Updating Sheet Row {row_num} (Column I) with {video_file_id}...")
     res = requests.put(url, headers=headers, json=body, timeout=30)
     print(f"DEBUG: Update Response ({res.status_code}): {res.text}")
     return res.status_code == 200
@@ -102,6 +110,19 @@ def download_text_file(token: str, file_id: str) -> str:
         res.encoding = 'utf-8'
         return res.text
     return ""
+
+def download_binary_file(token: str, file_id: str, output_path: str) -> bool:
+    """Driveからバイナリファイルをダウンロード"""
+    if not file_id: return False
+    url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+    headers = {"Authorization": f"Bearer {token}"}
+    res = requests.get(url, headers=headers, timeout=120)
+    if res.status_code == 200:
+        with open(output_path, "wb") as f:
+            f.write(res.content)
+        return True
+    print(f"  Download failed ({res.status_code}): {file_id}")
+    return False
 
 def extract_plan_from_text(text: str) -> dict:
     """テキストファイルから【生成構成】以降のJSONを抽出"""
@@ -147,6 +168,30 @@ def upload_video_to_drive(token: str, file_path: str, file_name: str) -> str:
     print(f"Upload failed: {upload_res.text}")
     return ""
 
+def archive_drive_file(token: str, file_id: str):
+    """ファイルをアーカイブフォルダに移動する"""
+    if not file_id: return
+    
+    # ファイルの現在の親フォルダを取得
+    get_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?fields=parents"
+    headers = {"Authorization": f"Bearer {token}"}
+    res = requests.get(get_url, headers=headers, timeout=30)
+    if res.status_code != 200:
+        print(f"  Failed to get file parents: {res.text}")
+        return
+    
+    parents = res.json().get("parents", [])
+    previous_parents = ",".join(parents)
+    
+    # フォルダを移動 (PATCH)
+    patch_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?removeParents={previous_parents}&addParents={ARCH_FOLDER_ID}"
+    res = requests.patch(patch_url, headers=headers, timeout=30)
+    
+    if res.status_code == 200:
+        print(f"  Archived file: {file_id}")
+    else:
+        print(f"  Archiving failed: {res.text}")
+
 # ==========================================
 # 5. Main Processing Logic
 # ==========================================
@@ -166,29 +211,34 @@ def process_single_row(token: str, row: dict) -> bool:
     plan = extract_plan_from_text(text_content)
     if not plan:
         print(f"  Failed to extract plan from text file")
-        print(f"  Looking for '【生成構成】' in text...")
-        if "【生成構成】" in text_content:
-            print(f"  Found marker, but JSON parse failed")
-        else:
-            print(f"  Marker not found in text")
         return False
     
-    # 2. TTS音声を生成
+    # 2. TTS・BGM資産をダウンロード
     tts_path = os.path.join(TEMP_DIR, f"{row['id']}_tts.wav")
-    # 新形式(text_en)と旧形式(text)の両方に対応
-    tts_text = " ".join([s.get("text_en") or s.get("text", "") for s in plan.get("scenes", [])])
-    print(f"  TTS text: {tts_text[:100]}...")
+    bgm_path = os.path.join(TEMP_DIR, f"{row['id']}_bgm.mp3")
     
-    if not get_tts_audio(tts_text, tts_path):
-        print(f"  TTS generation failed")
+    # TTSのダウンロード
+    if not download_binary_file(token, row.get("audio_file_id"), tts_path):
+        print(f"  Audio file download failed: {row.get('audio_file_id')}")
         return False
+    print(f"  TTS downloaded: {tts_path} (exists: {os.path.exists(tts_path)})")
+
+    # BGMのダウンロード (任意)
+    current_bgm_path = None
+    if download_binary_file(token, row.get("bgm_file_id"), bgm_path):
+        current_bgm_path = bgm_path
+        print(f"  BGM downloaded: {bgm_path} (exists: {os.path.exists(bgm_path)})")
+    else:
+        print(f"  BGM download failed or skipped: {row.get('bgm_file_id')}")
     
     # 3. 動画を生成
     output_path = os.path.join(TEMP_DIR, f"{row['id']}.mp4")
     try:
-        render_typography_video(plan, tts_path, output_path)
+        render_typography_video(plan, tts_path, output_path, bgm_path=current_bgm_path)
     except Exception as e:
         print(f"  Video rendering failed: {e}")
+        import traceback
+        traceback.print_exc()
         return False
     
     if not os.path.exists(output_path):
@@ -204,6 +254,8 @@ def process_single_row(token: str, row: dict) -> bool:
     # 5. スプシを更新
     if update_video_file_id(token, row["row_num"], video_file_id):
         print(f"  Done: {video_file_id}")
+        # 6. テキストファイルをアーカイブへ移動
+        archive_drive_file(token, row["text_file_id"])
         return True
     
     print(f"  Spreadsheet update failed")
@@ -221,7 +273,12 @@ def run_once():
     print(f"Pending rows: {len(pending)}")
     
     for row in pending:
-        process_single_row(token, row)
+        print(f"\n>>> Processing Started: Row {row['row_num']} (ID: {row['id']})")
+        success = process_single_row(token, row)
+        if success:
+            print(f">>> Processing Completed: Row {row['row_num']}")
+        else:
+            print(f"!!! Processing Failed: Row {row['row_num']}")
         time.sleep(2)  # API負荷軽減
 
 def run_loop(interval_sec: int = 60):

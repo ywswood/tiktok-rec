@@ -12,99 +12,27 @@ from typing import Dict, List, Optional
 # 1. Configuration
 # ==========================================
 ROOT_DIR = "C:\\data\\dev\\tiktok-rec"
-BIN_DIR = "C:\\data\\dev\\bin"
+BIN_DIR = "C:\\data\\dev\\.313p\\bin"
 FFMPEG_PATH = os.path.join(BIN_DIR, "ffmpeg.exe")
 TEMP_DIR = os.path.join(ROOT_DIR, "data", "temp")
 os.makedirs(TEMP_DIR, exist_ok=True)
-BGM_DIR = os.path.join(ROOT_DIR, "bgm")
-
 # API Bank Info
 BANK_URL = "https://script.google.com/macros/s/AKfycbxCscLkbbvTUU7sqpZSayJ8pEQlWl8mrEBaSy_FklbidJRc649HwWc4SF0Q3GvUQZbuGA/exec"
 BANK_PASS = "1030013"
 PROJECT_NAME = "tiktok-rec"
 
 # Font Settings
-FONT_MAIN = "C:/Windows/Fonts/arial.ttf"
-FONT_SUB = "C:/Windows/Fonts/msgothic.ttc"
-
-# ==========================================
-# 2. TTS Backend (Gemini Multimodal TTS via API Bank)
-# ==========================================
-def get_tts_audio(text: str, output_path: str) -> bool:
-    """API Bank からキーを取得し、Gemini API で音声を生成する"""
-    try:
-        # 1. API Bank からキーとモデル名を取得 (type=tts -> config_vシートを参照)
-        params = {"pass": BANK_PASS, "project": PROJECT_NAME, "type": "tts"}
-        res = requests.get(BANK_URL, params=params, timeout=30)
-        bank_data = res.json()
-        
-        if bank_data.get("status") != "success":
-            print(f"Bank Error: {bank_data.get('message')}")
-            return False
-        
-        api_key = bank_data["api_key"]
-        model_name = bank_data["model_name"]
-        
-        # 2. Gemini API 呼び出し (Multimodal Generation)
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        payload = {
-            "contents": [{
-                "parts": [{ "text": text }]
-            }],
-            "generationConfig": {
-                "responseModalities": ["AUDIO"],
-                "speechConfig": {
-                    "voiceConfig": {
-                        "prebuiltVoiceConfig": {
-                            "voiceName": "Puck" # TikTokで人気の高い男性ボイス
-                        }
-                    }
-                }
-            }
-        }
-        
-        response = requests.post(api_url, json=payload, timeout=60)
-        res_json = response.json()
-        
-        # 3. レスポンスから音声バイナリを抽出
-        if "candidates" in res_json:
-            # REST API は一般的に camelCase (inlineData) を返す
-            parts = res_json["candidates"][0]["content"]["parts"][0]
-            audio_data_base64 = parts.get("inlineData", {}).get("data")
-            if audio_data_base64:
-                import wave
-                raw_audio = base64.b64decode(audio_data_base64)
-                with wave.open(output_path, "wb") as wf:
-                    wf.setnchannels(1)      # モノラル
-                    wf.setsampwidth(2)     # 16-bit
-                    wf.setframerate(24000) # 24kHz (Gemini TTS default)
-                    wf.writeframes(raw_audio)
-                return True
-        
-        print(f"Gemini API Error: {res_json}")
-        return False
-        
-    except Exception as e:
-        print(f"TTS Exception: {e}")
-        return False
-
-# ==========================================
-# 3. BGM Selector
-# ==========================================
-def get_random_bgm(bgm_type: str) -> Optional[str]:
-    """
-    指定されたジャンルのBGMをassets/bgmからランダムに取得
-    フォルダ構造: assets/bgm/{type}/xxx.mp3
-    """
-    type_dir = os.path.join(BGM_DIR, bgm_type.lower())
-    if not os.path.exists(type_dir):
-        # ジャンルフォルダがない場合はルートから探すか、デフォルトを返す
-        type_dir = BGM_DIR
-    
-    files = [f for f in os.listdir(type_dir) if f.endswith(('.mp3', '.wav'))]
-    if not files:
-        return None
-    return os.path.join(type_dir, random.choice(files))
+FONT_DIR = "C:/Windows/Fonts"
+FONT_MAP = {
+    "impact": os.path.join(FONT_DIR, "impact.ttf").replace("\\", "/"),
+    "mincho": os.path.join(FONT_DIR, "msmincho.ttc").replace("\\", "/"),
+    "handwriting": os.path.join(FONT_DIR, "msgothic.ttc").replace("\\", "/"),
+    "cyber": os.path.join(FONT_DIR, "consolas.ttf").replace("\\", "/"),
+    "scatter": os.path.join(FONT_DIR, "ariblk.ttf").replace("\\", "/"),
+    "default": os.path.join(FONT_DIR, "arial.ttf").replace("\\", "/")
+}
+FONT_MAIN = FONT_MAP["default"]
+FONT_SUB = os.path.join(FONT_DIR, "msgothic.ttc").replace("\\", "/")
 
 # ==========================================
 # 4. Video Rendering (FFmpeg Typography + BGM Mix)
@@ -116,7 +44,7 @@ def parse_gradient(grad_str: str) -> List[str]:
     """linear-gradient(...) から hex カラーを抽出"""
     return re.findall(r'#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})', grad_str)
 
-def render_typography_video(plan: Dict, tts_path: str, output_file: str):
+def render_typography_video(plan: Dict, tts_path: str, output_file: str, bgm_path: str = None):
     import re
     scenes = plan.get("scenes", [])
     design = plan.get("design", {})
@@ -144,20 +72,34 @@ def render_typography_video(plan: Dict, tts_path: str, output_file: str):
     if accent_color.startswith('0x'):
         accent_color = "#" + accent_color[2:]
 
-    # フォントパスのエスケープ (Windows: C\: 形式が安定)
-    f_main = FONT_MAIN.replace(":", "\\:")
-    f_sub = FONT_SUB.replace(":", "\\:")
+    # フォント決定
+    font_key = design.get("font", "default").lower()
+    # WindowsのFFmpegフィルタ内ではコロン ':' を '\:' にエスケープし、かつバックスラッシュをスラッシュに統一するのが安全
+    f_main = FONT_MAP.get(font_key, FONT_MAIN).replace(":", "\\:").replace("\\", "/")
+    f_sub = FONT_SUB.replace(":", "\\:").replace("\\", "/")
     
-    bgm_path = get_random_bgm(bgm_type)
+    scenes = plan.get("scenes", [])
+    
     total_duration = sum([s.get("duration", 2) for s in scenes])
     filter_complex = []
 
-    # --- 安定版背景 (単色) ---
-    # 0xRRGGBB が不安定な可能性があるため、一旦シンプルな色でテスト。
-    # 本来は c1 を使いたいが、確実に動かすために 'darkblue' 等を検討
-    filter_complex.append(f"color=c=0x{c1}:s=720x1280:d={total_duration + 1}[bg_base]")
+    # 1.1 Background & Effects
+    effect_type = design.get("effect", "simple")
     
-    last_v_label = "[bg_base]"
+    # 基本背景
+    filter_complex.append(f"color=c=0x{c1}:s=720x1280:d={total_duration + 1}[bg_raw]")
+    
+    # 背景エフェクト
+    last_bg_label = "[bg_raw]"
+    if effect_type == "retro":
+        filter_complex.append(f"{last_bg_label}noise=alls=10:allf=t,hue=s=0.5[bg_retro]")
+        last_bg_label = "[bg_retro]"
+    elif effect_type == "particle":
+        # 簡易的なノイズで代用
+        filter_complex.append(f"{last_bg_label}noise=cns=0.1[bg_part]")
+        last_bg_label = "[bg_part]"
+
+    last_v_label = last_bg_label
     current_time = 0
     
     anim_type = design.get("animation", "pop")
@@ -170,9 +112,10 @@ def render_typography_video(plan: Dict, tts_path: str, output_file: str):
         start = current_time
         end = start + duration
         
-        # 位置計算
+        # 位置 & アニメーション定数
         base_x = "(w-text_w)/2"
         base_y = "(h-text_h)/2"
+        alpha_expr = "1"
         
         if anim_type == "slide":
             base_x = f"((w-text_w)/2)+1000*(1-min(1,(t-{start})/0.2))"
@@ -180,16 +123,32 @@ def render_typography_video(plan: Dict, tts_path: str, output_file: str):
             base_y = f"((h-text_h)/2)-100*sin(min(1,(t-{start})/0.3)*PI)"
         elif anim_type == "zoom":
             base_y = f"((h-text_h)/2)-150*(1-min(1,(t-{start})/0.25))"
+        elif anim_type == "fade":
+            alpha_expr = f"min(1,(t-{start})/0.5)*min(1,({end}-t)/0.5)"
+        elif anim_type == "typewriter":
+            # 簡易版：フェードインで代用
+            alpha_expr = f"min(1,(t-{start})/0.3)"
 
-        # fontcolor はシンプルな white 等をデフォルトに
+        # 文字色 & アクセント
         t_color = theme.get('textColor', 'white').replace('#', '0x')
         if not t_color.startswith('0x') and not t_color.isalpha():
             t_color = 'white'
+            
+        a_color = accent_color.replace('#', '0x')
+
+        # エフェクト別の装飾
+        extra_draw = ""
+        if effect_type == "neon":
+            # ネオン：光彩（シャドウを重ねる）
+            extra_draw = f":shadowcolor={a_color}:shadowx=0:shadowy=0:box=1:boxcolor={a_color}@0.2"
+        elif effect_type == "glitch":
+            # グリッチ：ランダムな揺れ
+            base_x = f"({base_x})+random(0)*10*between(t,{start},{end})"
 
         drawtext_main = (
             f"drawtext=fontfile='{f_main}':text='{text_en}':fontcolor={t_color}:fontsize=90:"
             f"box=1:boxcolor=black@0.4:boxborderw=15:"
-            f"x={base_x}:y={base_y}"
+            f"alpha='{alpha_expr}':x={base_x}:y={base_y}{extra_draw}"
         )
         
         v_next = f"[v{i}a]"
@@ -197,10 +156,11 @@ def render_typography_video(plan: Dict, tts_path: str, output_file: str):
         
         v_final = f"[v{i}]"
         if text_ja:
+            # 日本語字幕：アクセントカラーを背景ボックスに使用
             filter_complex.append(
                 f"{v_next}drawtext=fontfile='{f_sub}':text='{text_ja}':fontcolor={t_color}:fontsize=40:"
-                f"box=1:boxcolor=black@0.4:boxborderw=8:"
-                f"x=(w-text_w)/2:y=h-300:enable='between(t,{start},{end})'{v_final}"
+                f"box=1:boxcolor={a_color}@0.6:boxborderw=8:"
+                f"alpha='{alpha_expr}':x=(w-text_w)/2:y=h-300:enable='between(t,{start},{end})'{v_final}"
             )
         else:
             filter_complex.append(f"{v_next}null{v_final}")
@@ -237,14 +197,25 @@ def render_typography_video(plan: Dict, tts_path: str, output_file: str):
     ]
     
     print(f"Executing FFmpeg... Total Duration: {total_duration}s")
+    print(f"Filter Script Path: {filter_script_path}")
+    # print(f"Command: {' '.join(cmd)}") # Command might be too long
+    
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, encoding="utf-8")
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding="utf-8")
+        print("FFmpeg Success.")
     except subprocess.CalledProcessError as e:
-        print(f"FFmpeg Error Output:\n{e.stderr}")
+        print(f"FFmpeg Failed with exit code {e.returncode}")
+        print(f"FFmpeg Error Output (last 500 chars):\n{e.stderr[-500:]}")
+        # フィルターの中身もエラー時には表示する（トラブルシューティング用）
+        with open(filter_script_path, "r", encoding="utf-8") as f:
+             print(f"Filter Script Content:\n{f.read()}")
         raise
     finally:
         if os.path.exists(filter_script_path):
-            os.remove(filter_script_path)
+            try:
+                os.remove(filter_script_path)
+            except:
+                pass
 
 if __name__ == "__main__":
     test_plan = {

@@ -157,11 +157,10 @@ h1 {
   letter-spacing: 0.1em;
 }
 
-/* Recording State */
+/* --- Recording State --- */
 .recording .rec-ring {
   animation: spinFast 1s linear infinite;
   background: linear-gradient(135deg, #ff0050, #ff0050);
-  /* Red pulse */
   box-shadow: 0 0 30px #ff0050;
   mask: none;
   -webkit-mask: none;
@@ -182,182 +181,21 @@ h1 {
 }
 
 @keyframes spinSlow {
-  0% {
-    transform: rotate(0deg);
-  }
-
-  100% {
-    transform: rotate(360deg);
-  }
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 @keyframes spinFast {
-  0% {
-    transform: scale(1);
-    opacity: 0.6;
-  }
-
-  50% {
-    transform: scale(1.1);
-    opacity: 0.3;
-  }
-
-  100% {
-    transform: scale(1);
-    opacity: 0.6;
-  }
+  0% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.1); opacity: 0.3; }
+  100% { transform: scale(1); opacity: 0.6; }
 }
 
-/* --- Result Controls (Hidden on Start) --- */
+/* --- Control Area --- */
 .controls-area {
   width: 100%;
   margin-top: 20px;
   min-height: 80px;
-}
-
-/* Reusing animation/effect classes from before */
-.scene-text {
-  font-size: 2rem;
-  font-weight: 900;
-  text-align: center;
-  padding: 20px;
-  line-height: 1.4;
-  white-space: pre-wrap;
-  z-index: 10;
-  opacity: 0;
-  color: #fff;
-}
-
-/* Pop */
-.anim-pop {
-  animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-}
-
-@keyframes popIn {
-  0% {
-    transform: scale(0);
-    opacity: 0;
-  }
-
-  80% {
-    transform: scale(1.1);
-    opacity: 1;
-  }
-
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-/* Slide */
-.anim-slide {
-  animation: slideIn 0.5s ease-out forwards;
-}
-
-@keyframes slideIn {
-  0% {
-    transform: translateX(100%);
-    opacity: 0;
-  }
-
-  100% {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
-
-/* Zoom */
-.anim-zoom {
-  animation: zoomIn 3s linear forwards;
-}
-
-@keyframes zoomIn {
-  0% {
-    transform: scale(0.5);
-    opacity: 0;
-  }
-
-  20% {
-    transform: scale(1);
-    opacity: 1;
-  }
-
-  100% {
-    transform: scale(1.5);
-    opacity: 1;
-  }
-}
-
-/* Fade */
-.anim-fade {
-  animation: fadeInUp 0.8s ease forwards;
-}
-
-@keyframes fadeInUp {
-  0% {
-    transform: translateY(20px);
-    opacity: 0;
-  }
-
-  100% {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-/* Typewriter */
-.anim-typewriter {
-  overflow: hidden;
-  white-space: nowrap;
-  animation: typing 2s steps(20, end) forwards;
-}
-
-@keyframes typing {
-  from {
-    width: 0;
-    opacity: 1;
-  }
-
-  to {
-    width: 100%;
-    opacity: 1;
-  }
-}
-
-/* Effects */
-.effect-neon {
-  text-shadow: 0 0 5px #fff, 0 0 10px #fff, 0 0 20px var(--accent-cyan), 0 0 40px var(--accent-cyan);
-}
-
-.effect-simple {
-  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
-}
-
-/* Fonts */
-.font-impact {
-  font-family: 'Impact', sans-serif;
-  text-transform: uppercase;
-}
-
-.font-mincho {
-  font-family: 'Noto Serif JP', serif;
-}
-
-.font-handwriting {
-  font-family: 'Kaushan Script', cursive;
-  font-style: italic;
-}
-
-.font-cyber {
-  font-family: 'Orbitron', sans-serif;
-  letter-spacing: 2px;
-}
-
-.font-scatter {
-  font-family: 'Impact', sans-serif;
-  letter-spacing: -2px;
-  transform: rotate(-2deg);
 }
 
 .hidden {
