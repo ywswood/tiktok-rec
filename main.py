@@ -7,8 +7,10 @@ import re
 import json
 import time
 import requests
+import tempfile
 from dotenv import load_dotenv
 from video_generator import render_typography_video
+from audio_analyzer import analyze_audio_and_split_scenes
 
 # ==========================================
 # 1. Configuration
@@ -24,7 +26,7 @@ ARCH_FOLDER_ID = "1rLHjrtLcbjwX-gtmlwCiN2W9h7AjvEo" # アーカイブフォル�
 
 SHEET_NAME = "txt"
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-TEMP_DIR = os.path.join(ROOT_DIR, "data", "temp")
+TEMP_DIR = os.path.join(tempfile.gettempdir(), "tiktok-rec")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 # ==========================================
@@ -231,10 +233,25 @@ def process_single_row(token: str, row: dict) -> bool:
     else:
         print(f"  BGM download failed or skipped: {row.get('bgm_file_id')}")
     
+    # 2.5 音声を解析してシーン分割（タイムスタンプ同期）
+    print(f"  Analyzing audio for timestamps...")
+    full_text_en = plan.get("full_text_en", "")
+    full_text_ja = plan.get("full_text_ja", "")
+    
+    # 解析を実行し、正規化された音声パスも取得
+    dynamic_scenes, normalized_tts_path = analyze_audio_and_split_scenes(tts_path, full_text_en, full_text_ja)
+    
+    if dynamic_scenes:
+        plan["scenes"] = dynamic_scenes
+        print(f"  Dynamic scenes created: {len(dynamic_scenes)}")
+    else:
+        print(f"  Warning: Could not create dynamic scenes. Using existing plan or defaults.")
+
     # 3. 動画を生成
     output_path = os.path.join(TEMP_DIR, f"{row['id']}.mp4")
     try:
-        render_typography_video(plan, tts_path, output_path, bgm_path=current_bgm_path)
+        # 重要: Whisperが成功/正規化した normalized_tts_path を使用する
+        render_typography_video(plan, normalized_tts_path, output_path, bgm_path=current_bgm_path)
     except Exception as e:
         print(f"  Video rendering failed: {e}")
         import traceback
@@ -247,18 +264,21 @@ def process_single_row(token: str, row: dict) -> bool:
     
     # 4. Driveにアップロード
     video_file_id = upload_video_to_drive(token, output_path, f"{row['id']}.mp4")
-    if not video_file_id:
-        print(f"  Upload failed")
-        return False
     
-    # 5. スプシを更新
-    if update_video_file_id(token, row["row_num"], video_file_id):
+    # 5. スプシを更新 - 成功時のみ一時ファイルを削除
+    if video_file_id and update_video_file_id(token, row["row_num"], video_file_id):
         print(f"  Done: {video_file_id}")
         # 6. テキストファイルをアーカイブへ移動
         archive_drive_file(token, row["text_file_id"])
+        
+        # Cleanup
+        for p in [tts_path, bgm_path, output_path]:
+            if p and os.path.exists(p):
+                try: os.remove(p)
+                except: pass
         return True
     
-    print(f"  Spreadsheet update failed")
+    print(f"  Processing failed at upload or update stage")
     return False
 
 def run_once():

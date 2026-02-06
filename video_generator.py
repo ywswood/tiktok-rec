@@ -6,15 +6,16 @@ import base64
 import requests
 import subprocess
 import random
+import tempfile
 from typing import Dict, List, Optional
 
 # ==========================================
 # 1. Configuration
 # ==========================================
 ROOT_DIR = "C:\\data\\dev\\tiktok-rec"
-BIN_DIR = "C:\\data\\dev\\.313p\\bin"
+BIN_DIR = "C:\\data\\dev\\.313p\\.venv\\Scripts"
 FFMPEG_PATH = os.path.join(BIN_DIR, "ffmpeg.exe")
-TEMP_DIR = os.path.join(ROOT_DIR, "data", "temp")
+TEMP_DIR = os.path.join(tempfile.gettempdir(), "tiktok-rec")
 os.makedirs(TEMP_DIR, exist_ok=True)
 # API Bank Info
 BANK_URL = "https://script.google.com/macros/s/AKfycbxCscLkbbvTUU7sqpZSayJ8pEQlWl8mrEBaSy_FklbidJRc649HwWc4SF0Q3GvUQZbuGA/exec"
@@ -48,7 +49,11 @@ def render_typography_video(plan: Dict, tts_path: str, output_file: str, bgm_pat
     import re
     scenes = plan.get("scenes", [])
     design = plan.get("design", {})
+    if isinstance(design, str):
+        design = {}
     theme = design.get("theme", {})
+    if isinstance(theme, str):
+        theme = {}
     bgm_type = plan.get("bgm", "chill")
     
     # 1. Background Design
@@ -106,11 +111,17 @@ def render_typography_video(plan: Dict, tts_path: str, output_file: str, bgm_pat
     
     for i, scene in enumerate(scenes):
         duration = float(scene.get("duration", 2))
-        text_en = (scene.get("text_en") or scene.get("text", "")).replace("'", "\\'").replace(":", "\\:")
-        text_ja = (scene.get("text_ja") or "").replace("'", "\\'").replace(":", "\\:")
         
-        start = current_time
-        end = start + duration
+        # 解析によって得られた詳細なタイムスタンプがあればそれを使用
+        if "start" in scene and "end" in scene:
+            start = float(scene["start"])
+            end = float(scene["end"])
+        else:
+            start = current_time
+            end = start + duration
+        
+        text_en = (scene.get("text_en") or scene.get("text", "")).replace('\n', ' ').replace("'", "\\'").replace(":", "\\:").strip()
+        text_ja = (scene.get("text_ja") or "").replace('\n', ' ').replace("'", "\\'").replace(":", "\\:").strip()
         
         # 位置 & アニメーション定数
         base_x = "(w-text_w)/2"
@@ -205,17 +216,14 @@ def render_typography_video(plan: Dict, tts_path: str, output_file: str, bgm_pat
         print("FFmpeg Success.")
     except subprocess.CalledProcessError as e:
         print(f"FFmpeg Failed with exit code {e.returncode}")
-        print(f"FFmpeg Error Output (last 500 chars):\n{e.stderr[-500:]}")
+        print(f"FFmpeg Error Output:\n{e.stderr}")
         # フィルターの中身もエラー時には表示する（トラブルシューティング用）
         with open(filter_script_path, "r", encoding="utf-8") as f:
              print(f"Filter Script Content:\n{f.read()}")
         raise
     finally:
-        if os.path.exists(filter_script_path):
-            try:
-                os.remove(filter_script_path)
-            except:
-                pass
+        # success時のみ削除
+        pass 
 
 if __name__ == "__main__":
     test_plan = {
