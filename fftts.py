@@ -196,6 +196,50 @@ def get_text_from_sheet(session_id):
         print(f"❌ スプレッドシート取得エラー: {e}")
         sys.exit(1)
 
+
+def update_sheet_video_id(session_id, video_id):
+    """スプレッドシートの I列（videoFileId）を更新"""
+    try:
+        service = get_sheets_service()
+        
+        # session_id の行番号を特定
+        result = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range='txt!A:A'  # session_id を探すため A列をスキャン
+        ).execute()
+        
+        values = result.get('values', [])
+        row_num = None
+        
+        for idx, row in enumerate(values):
+            if len(row) > 0 and str(row[0]) == session_id:
+                row_num = idx + 1  # 1-based インデックス
+                break
+        
+        if not row_num:
+            print(f"❌ Session ID '{session_id}' がスプレッドシートに見つかりません")
+            return False
+        
+        # I列 (9列目) を更新
+        cell_range = f'txt!I{row_num}'
+        update_range_data = {
+            'values': [[video_id]]
+        }
+        
+        service.spreadsheets().values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=cell_range,
+            valueInputOption='USER_ENTERED',
+            body=update_range_data
+        ).execute()
+        
+        print(f"✅ スプレッドシート I列を更新: Row {row_num} = {video_id}")
+        return True
+    
+    except Exception as e:
+        print(f"❌ スプレッドシート更新エラー: {e}")
+        return False
+
 # ================================================
 # Google Drive ダウンロード・アップロード
 # ================================================
@@ -708,7 +752,12 @@ async def main_async(session_id):
         
         # 6. Google Drive にアップロード
         print("\n=== ステップ6: Google Drive にアップロード ===")
-        upload_file_to_drive(video_path, VIDEO_FOLDER_ID, session_id)
+        video_id = upload_file_to_drive(video_path, VIDEO_FOLDER_ID, session_id)
+        
+        # 7. スプレッドシートの I列（videoFileId）を更新
+        if video_id:
+            print(f"\n=== ステップ7: スプレッドシート更新 ===")
+            update_sheet_video_id(session_id, video_id)
         
         print("\n✅ 全処理完了！")
     
