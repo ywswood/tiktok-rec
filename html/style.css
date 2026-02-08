@@ -1,0 +1,226 @@
+:root {
+  --app-bg: #000000;
+  --text-primary: #ffffff;
+  --text-secondary: #666666;
+  --accent-cyan: #00f2ea;
+  --accent-pink: #ff0050;
+  --gradient-ring: linear-gradient(135deg, #ff0050, #00f2ea);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  font-family: 'Noto Sans JP', sans-serif;
+}
+
+body {
+  background-color: var(--app-bg);
+  color: var(--text-primary);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.container {
+  width: 100%;
+  max-width: 450px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 40px 20px;
+  text-align: center;
+}
+
+/* --- Header Section --- */
+header {
+  margin-top: 40px;
+  margin-bottom: 20px;
+  transition: opacity 0.5s;
+}
+
+h1 {
+  font-size: 2.2rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.05em;
+  margin-bottom: 10px;
+}
+
+.highlight {
+  color: var(--accent-cyan);
+}
+
+.subtitle {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-weight: 400;
+  margin-top: 10px;
+}
+
+/* --- Main Interaction Area --- */
+.main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  position: relative;
+}
+
+/* 9:16 Video Preview Screen */
+.video-container {
+  width: 100%;
+  height: 100%;
+  display: none;
+  /* Hidden by default until recorded */
+  justify-content: center;
+  align-items: center;
+}
+
+.video-screen {
+  width: 100%;
+  aspect-ratio: 9/16;
+  background: #000;
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 30px rgba(0, 242, 234, 0.1);
+}
+
+/* --- Recording Button (The Hero) --- */
+.rec-button-wrapper {
+  position: relative;
+  width: 200px;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.rec-button-wrapper:active {
+  transform: scale(0.95);
+}
+
+/* Gradient Ring */
+.rec-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--gradient-ring);
+  /* Cutout the middle to make it a ring */
+  mask: radial-gradient(transparent 64px, black 66px);
+  -webkit-mask: radial-gradient(transparent 64px, black 66px);
+  /* Inner radius */
+  animation: spinSlow 10s linear infinite;
+}
+
+/* Inner Glow/Fill */
+.rec-fill {
+  width: 160px;
+  height: 160px;
+  background: radial-gradient(circle, rgba(20, 20, 20, 1) 0%, rgba(5, 5, 5, 1) 80%);
+  border-radius: 50%;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+}
+
+.rec-icon {
+  font-size: 3rem;
+  color: #fff;
+  margin-bottom: 5px;
+}
+
+.rec-text {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #888;
+  letter-spacing: 0.1em;
+}
+
+/* --- Recording State --- */
+.recording .rec-ring {
+  animation: spinFast 1s linear infinite;
+  background: linear-gradient(135deg, #ff0050, #ff0050);
+  box-shadow: 0 0 30px #ff0050;
+  mask: none;
+  -webkit-mask: none;
+  width: 180px;
+  height: 180px;
+  top: 10px;
+  left: 10px;
+  opacity: 0.5;
+}
+
+.recording .rec-text {
+  color: var(--accent-pink);
+  text-shadow: 0 0 5px var(--accent-pink);
+}
+
+.recording .rec-icon {
+  color: var(--accent-pink);
+}
+
+@keyframes spinSlow {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes spinFast {
+  0% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.1); opacity: 0.3; }
+  100% { transform: scale(1); opacity: 0.6; }
+}
+
+/* --- Control Area --- */
+.controls-area {
+  width: 100%;
+  margin-top: 20px;
+  min-height: 80px;
+}
+
+.btn-generate {
+  width: 100%;
+  padding: 14px 20px;
+  background: linear-gradient(135deg, #00f2ea, #0088ff);
+  color: #000;
+  border: none;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(0, 242, 234, 0.3);
+}
+
+.btn-generate:active {
+  transform: scale(0.98);
+}
+
+.btn-generate:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hidden {
+  display: none !important;
+}

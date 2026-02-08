@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>TikTokRec</title>
+  <link href="style.css?v=fresh20260205_2325" rel="stylesheet">
+</head>
+
+<body>
+
+  <div class="container">
+
+    <!-- Header -->
+    <header id="appHeader">
+      <h1>話すだけで<br><span class="highlight">MP4動画</span>が完成。</h1>
+      <p class="subtitle">Gemini 3 Flashがトレンド構成を自動生成</p>
+    </header>
+
+    <!-- Main Recording Button -->
+    <div class="main-area">
+      <div id="recButton" class="rec-button-wrapper">
+        <div class="rec-ring"></div>
+        <div class="rec-fill">
+          <div class="rec-icon">🎙️</div>
+          <div class="rec-text" id="recText">RECORDING</div>
+        </div>
+      </div>
+
+      <!-- Video/Result screens removed for async processing -->
+    </div>
+
+    <!-- Bottom Controls (Status & Result Actions) -->
+    <div class="controls-area">
+      <div id="status" style="margin-bottom: 15px; color: #888; font-size: 0.8rem;">タップして録音を開始</div>
+      
+      <!-- 動画生成ボタン -->
+      <button id="generateVideoBtn" class="btn-generate" style="margin-top: 20px; display: none;">
+        🎬 動画を生成
+      </button>
+    </div>
+  </div>
+
+  <script src="app.js?v=fresh20260205_2325"></script>
+</body>
+
+</html>
