@@ -1,7 +1,7 @@
 // Basic config
 const CONFIG = {
-    // Production GAS Web App URL
-    API_URL: 'https://script.google.com/macros/s/AKfycbwtKHqOYcbBRqe-fEqUqiag_oFjSlnkD8K5If-pIq5UjE386qQf47Rkdfe1LTmQdjhH9Q/exec',
+    // Production GAS Web App URL (環境変数から読み込む)
+    API_URL: process.env.GAS_API_URL || 'https://script.google.com/macros/s/YOUR_GAS_SCRIPT_ID/exec',
     MIME_TYPE: 'audio/webm;codecs=opus',
     CHUNK_DURATION: 5 * 60 * 1000, // 5分ごとにアップロード
     FILE_EXTENSION: '.webm'
