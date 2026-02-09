@@ -38,3 +38,5 @@ build/
 
 # Chrome プロファイル
 chrome_profile/
+# GCP Credentials
+gcp_creds.json

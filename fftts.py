@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 # Google API
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import io
@@ -30,13 +31,20 @@ import io
 # ================================================
 load_dotenv()
 
+# Google API スコープ
+SCOPES = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive'
+]
+
 FFMPEG_PATH = r"C:\data\dev\.313p\bin\ffmpeg.exe"
+
+# GCP認証ファイル
+GCP_CREDS_FILE = os.getenv("GCP_CREDS_FILE", "./gcp_creds.json")
+TOKEN_FILE = "token.json"
 
 # Google API設定
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-GOOGLE_REFRESH_TOKEN = os.getenv("GOOGLE_REFRESH_TOKEN")
 
 # Google Drive フォルダID
 VOICE_FOLDER_ID = os.getenv("VOICE_FOLDER_ID")
@@ -82,17 +90,26 @@ FINAL_MESSAGE_DURATION = 0.5
 # ================================================
 def get_google_credentials():
     """Google APIの認証情報を取得"""
-    creds = Credentials(
-        token=None,
-        refresh_token=GOOGLE_REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET
-    )
+    creds = None
     
-    # 常にリフレッシュ（新規オブジェクトため expired フラグを信頼できない）
-    if creds and creds.refresh_token:
-        creds.refresh(Request())
+    # token.json が存在する場合、保存されたトークンを使う
+    if os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+    
+    # トークンが無効か存在しない場合、認証フローを実行
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            # トークン更新
+            creds.refresh(Request())
+        else:
+            # 初回認証フロー（ブラウザで認証）
+            flow = InstalledAppFlow.from_client_secrets_file(
+                GCP_CREDS_FILE, SCOPES)
+            creds = flow.run_local_server(port=8080)
+        
+        # token.json に保存
+        with open(TOKEN_FILE, 'w') as token:
+            token.write(creds.to_json())
     
     return creds
 
