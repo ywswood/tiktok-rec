@@ -200,9 +200,20 @@ function handleGenerateScript(data) {
         throw new Error('Transcription failed for all chunks. Errors: ' + errors.join(', '));
     }
 
-    // 3. 動画プラン生成
+    // 3. 動画プラン生成（テスト関数と同様に、入力テキストをログ出力しておく）
+    Logger.log('=== 動画プラン生成（handleGenerateScript）開始 ===');
+    Logger.log('【入力テキスト（日本語 / fullTranscript）】');
+    Logger.log(fullTranscript);
+    Logger.log('---');
+
     const videoPlan = generateVideoPlan(fullTranscript);
-    if (!videoPlan) throw new Error('Content generation failed');
+
+    // generateVideoPlan が失敗して null を返した場合のチェック（testTranslationQuality と同様の考え方）
+    if (!videoPlan) {
+        Logger.log('❌ generateVideoPlan から null が返ってきました。（handleGenerateScript）');
+        Logger.log('   → generateVideoPlan 内の "Content Generation Error" ログ、ならびに上記 fullTranscript の内容を確認してください。');
+        throw new Error('Content generation failed (videoPlan is null)');
+    }
 
     // 3.5. TTS生成 & BGM選定 (New logic)
     let audioFileId = '';
@@ -242,12 +253,12 @@ function handleGenerateScript(data) {
         saveToSpreadsheet({
             id: sessionId,
             created: formattedDate,
-            caption_ja: videoPlan.caption_ja,
-            caption_en: videoPlan.caption_en,
+            full_text_ja: videoPlan.full_text_ja,
+            full_text_en: videoPlan.full_text_en,
             hashtags: videoPlan.hashtags.join(', '),
             bgm: videoPlan.bgm,
-            bgmFileId: bgmFileId,    // 追加
-            audioFileId: audioFileId, // 追加
+            bgmFileId: bgmFileId,
+            audioFileId: audioFileId,
             textFileId: textFileId,
             videoFileId: ''
         });
@@ -354,18 +365,21 @@ function generateVideoPlan(transcript) {
 
 【処理プロセス】
 1. そのまま英訳: 入力された日本語の書き起こし内容を、生のニュアンスを一切損なわず、そのまま忠実に英語へ翻訳してください（意訳厳禁）。
-2. ボリューム調整: その英語をベースに、動画尺が【25秒前後】、英語語数が【75〜85語】、日本語文字数が【450〜500文字】程度になるよう、生の言葉を活かしたまま分量を調整してください。
+2. ボリューム調整: その英語をベースに、英語文字数が【450〜500文字】程度になるよう、生の言葉を活かしたまま分量を調整してください。
 3. 日本語訳: ステップ2で調整が完了した「一続きの英語」をベースに、元の熱量と口癖などを維持したまま日本語訳を作成してください。
 
 【出力要件】
 - hook: 調整後のテキストから抽出した、冒頭0.5秒で惹きつける英語のキャッチコピー。
-- full_text_en: ステップ2で作成した、25秒相当（75〜85語）の一続きのフル英語テキスト（分割厳禁）。
+- full_text_en: ステップ2で作成した、英語テキストの一続きのフル英語テキスト（分割厳禁）。
 - full_text_ja: ステップ3で作成した、一続きの日本語テキスト（分割厳禁）。
 - caption_ja: 話し手の生のニュアンスや熱量をそのまま反映した日本語の投稿本文。
 - caption_en: 英語の投稿本文。
 - hashtags: 英語のトレンドタグ5つ。
 - bgm: ジャンル選択 ["chill", "energy"]。
 - design: デザインテーマ設定。
+
+【出力形式】
+以下を1つのJSONオブジェクト {} として出力してください。配列 [] ではなく、単一のオブジェクトのみを返してください。
 
 【ルール】
 - 意訳・きれいな要約は厳禁です。
@@ -445,19 +459,18 @@ function saveToSpreadsheet(data) {
     const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
     if (!sheet) throw new Error(`Sheet '${CONFIG.SHEET_NAME}' not found`);
 
-    // カラム構成: ID, 作成日時, 投稿予定日, 投稿日, ステータス, 本文（和）, 本文（英）, ハッシュタグ, BGM, 音声テキストID, 動画ファイルID, 備考
-    // 拡張カラム考慮: [BGM_FILE_ID, AUDIO_FILE_ID] を追加
+    // カラム構成: ID, 作成日時, 投稿予定日, 投稿日, ステータス, 本文（和）, 本文（英）, ハッシュタグ, 動画ファイルID, テキストファイルID, BGM, 備考, BGMファイルID, 音声ファイルID
     sheet.appendRow([
-        data.id,              // ID
-        data.created,         // 作成日時
-        '',                   // 投稿予定日
-        '',                   // 投稿日
-        '下書き',             // ステータス
-        data.caption_ja,      // 本文（和）
-        data.caption_en,      // 本文（英）
-        data.hashtags,        // ハッシュタグ
+        data.id,              // ID (Col A)
+        data.created,         // 作成日時 (Col B)
+        '',                   // 投稿予定日 (Col C)
+        '',                   // 投稿日 (Col D)
+        '下書き',             // ステータス (Col E)
+        data.full_text_ja,    // 本文（和） (Col F)
+        data.full_text_en,    // 本文（英） (Col G)
+        data.hashtags,        // ハッシュタグ (Col H)
         data.videoFileId,     // 動画ファイルID (Col I)
-        data.textFileId,      // 音声テキストID (Col J)
+        data.textFileId,      // テキストファイルID (Col J)
         data.bgm,             // BGM (Col K)
         '',                   // 備考 (Col L)
         data.bgmFileId,       // BGMファイルID (Col M)
@@ -782,4 +795,55 @@ function runGenerateAudioFromLastSheetRow() {
     const sessionId = "260206_153443"; // ターゲットのID
     const result = generateAudioFromSheet(sessionId);
     Logger.log(result);
+}
+
+// ==========================================
+// 8. Test: Translation Quality Check
+// ==========================================
+
+/**
+ * 翻訳精度テスト: 260209_100750.txt の日本語 → 英訳 → 和訳
+ */
+function testTranslationQuality() {
+    const transcript = `もうさ、選挙の結果が全部だよ。選挙中に街頭で大声で叫んでるキレイな公約とか、誤魔化すための嘘っぽい数字とか…もうそんなのに騙されないって。政治家が何て言ったかなんてどうでもいい。結局、何を本当にやったのか、これから何をやろうとしてるのか。その『結果』だけ見て判断すればいいんだよ。特にさ、国家の土台をガタガタにするような法案とか、国民の安全を後回しにしてるような政策をゴリ押ししてきた連中には、ちゃんと厳しい判定下さないとダメだろ。真実を見るのって、ぶっちゃけ痛いこともあるよ。でも今のみんなには、そのくらいの強さがいるんだ。感情に流されてふわっと投票するんじゃなくて、冷たく事実だけ見つめてさ。本当に日本の未来にプラスになる方を選ばないと。今、まさにデカい試練の真っ只中にいるよ。誰が本気で日本を思ってるのか、誰が日本を売り飛ばそうとしてるのか。答えなんて、結果を見ればハッキリ分かるって。だからさ、後悔しないように、ちゃんと確かな結果を見て決めようぜ。`;
+
+    Logger.log('=== 翻訳精度テスト開始 ===');
+    Logger.log('【入力テキスト（日本語）】');
+    Logger.log(transcript);
+    Logger.log('---');
+
+    try {
+        const result = generateVideoPlan(transcript);
+
+        // generateVideoPlan が失敗して null を返した場合のチェック
+        if (!result) {
+            Logger.log('❌ generateVideoPlan から null が返ってきました。');
+            Logger.log('   → generateVideoPlan 内の "Content Generation Error" ログを確認してください。');
+            return;
+        }
+
+        Logger.log('\n✅ AI処理完了');
+        Logger.log('\n【生成結果（JSON）】');
+        Logger.log(JSON.stringify(result, null, 2));
+
+        Logger.log('\n【英訳テキスト（full_text_en）】');
+        Logger.log(result.full_text_en);
+        Logger.log(`語数: ${result.full_text_en.split(' ').length}語`);
+
+        Logger.log('\n【和訳テキスト（full_text_ja）】');
+        Logger.log(result.full_text_ja);
+        Logger.log(`文字数: ${result.full_text_ja.length}文字`);
+
+        Logger.log('\n【ハッシュタグ】');
+        Logger.log(result.hashtags.join(' '));
+
+        Logger.log('\n【BGM選択】');
+        Logger.log(result.bgm);
+
+        Logger.log('\n=== テスト完了 ===');
+
+    } catch (error) {
+        Logger.log('❌ エラー発生: ' + error.message);
+        Logger.log('スタックトレース: ' + error.stack);
+    }
 }

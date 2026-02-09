@@ -1,5 +1,6 @@
 # 環境変数
 .env
+.env.*
 .env.local
 
 # Python キャッシュ
@@ -38,5 +39,8 @@ build/
 
 # Chrome プロファイル
 chrome_profile/
-# GCP Credentials
+
+# GCP Credentials & OAuth Tokens
 gcp_creds.json
+token.json
+*.json.encrypted
